@@ -19,6 +19,45 @@ fn tile_2d[tiled_fn: Tile2DFunc, stride_x: Int, stride_y: Int](end_x: Int, end_y
         for x in range(0, end_x, stride_x):
             tiled_fn[stride_x, stride_y](x, y)
 
+fn Softmax(inout matrix: Matrix[float_dtype], dim:Int = 0) -> Matrix[float_dtype]:
+    
+    var exp_matrix = matrix.exp()
+
+    if dim == 0:
+        @parameter
+        fn channel_softmax(channel: Int):
+            let channel_sum = exp_matrix[channel, :, :].sum()
+            var channel_div = exp_matrix[channel, :, :] / channel_sum
+            exp_matrix.set_items(channel, slice(0, matrix.dim1), slice(0, matrix.dim2), channel_div)
+        parallelize[channel_softmax](matrix.dim0, matrix.dim0)
+        return exp_matrix
+    elif dim == 1:
+        @parameter
+        fn row_softmax_channel(channel: Int):
+            @parameter
+            fn row_softmax(row: Int):
+                let row_sum = exp_matrix[channel, row, :].sum()
+                var row_div = exp_matrix[channel, row, :] / row_sum
+                exp_matrix.set_items(channel, row, slice(0, matrix.dim2), row_div)
+            parallelize[row_softmax](matrix.dim1, matrix.dim1)
+        parallelize[row_softmax_channel](matrix.dim0, matrix.dim0)
+        return exp_matrix
+
+    elif dim == 2:
+        @parameter
+        fn column_softmax_channel(channel: Int):
+            @parameter
+            fn column_softmax(column: Int):
+                let col_sum = exp_matrix[channel, :, column].sum()
+                var col_div = exp_matrix[channel, :, column] / col_sum
+                exp_matrix.set_items(channel, slice(0, matrix.dim1), column, col_div)
+            parallelize[column_softmax](matrix.dim2, matrix.dim2)
+        parallelize[column_softmax_channel](matrix.dim0, matrix.dim0)
+        return exp_matrix
+    else:
+        print("Invalid dimension for softmax. Returning null matrix")
+        return Matrix[float_dtype](0, 0, 0)
+
 struct Matrix_Array[dtype: DType]:
     var _data: DTypePointer[dtype]
     var matrix_shape: Tuple[Int, Int, Int]
@@ -845,6 +884,57 @@ struct Matrix[dtype: DType]:
 
         return new_matrix
 
+    fn triu(self, diagonal: Int = 0) -> Self:
+        if diagonal != 0  and diagonal != 1:
+            print("Invalid diagonal value. Returning null matrix")
+            return Self(0, 0, 0)
+
+        var new_matrix = Self(self.dim0, self.dim1, self.dim2)
+        new_matrix.__copyinit__(self)
+
+        @parameter
+        fn triu_channel(channel_idx: Int):
+            @parameter
+            fn triu_row(row_idx: Int):
+                @parameter
+                fn triu_col[width: Int](col_idx: Int):
+                    if diagonal == 0:
+                        if row_idx > col_idx:
+                            new_matrix[channel_idx, row_idx, col_idx] = 0.0
+                    else:
+                        let adjusted_row_idx = new_matrix.dim1 - row_idx - 1
+
+                        if row_idx < col_idx:
+                            new_matrix[channel_idx, adjusted_row_idx, col_idx] = 0.0
+                vectorize_unroll[1, 1, triu_col](self.dim2)
+            parallelize[triu_row](self.dim1, self.dim1)
+        parallelize[triu_channel](self.dim0, self.dim0)
+
+        return new_matrix
+
+    fn masked_fill(self, mask: Self, value: float_base) -> Self:
+        if self.dim0 != mask.dim0 or self.dim1 != mask.dim1 or self.dim2 != mask.dim2:
+            print("Non-matching dimensions for masked fill. Returning null matrix")
+            return Self(0, 0, 0)
+
+        var new_matrix = Self(self.dim0, self.dim1, self.dim2)
+        new_matrix.__copyinit__(self)
+        let simd_value = SIMD[dtype, 1].splat(value.cast[dtype]())
+
+        @parameter
+        fn masked_fill_channel(channel_idx: Int):
+            @parameter
+            fn masked_fill_row(row_idx: Int):
+                @parameter
+                fn masked_fill_col[width: Int](col_idx: Int):
+                    if mask[channel_idx, row_idx, col_idx] != 0:
+                        new_matrix[channel_idx, row_idx, col_idx] = simd_value
+                vectorize_unroll[1, 1, masked_fill_col](self.dim2)
+            parallelize[masked_fill_row](self.dim1, self.dim1)
+        parallelize[masked_fill_channel](self.dim0, self.dim0)
+
+        return new_matrix
+
     fn print(self, prec: Int = 4) -> None:
         let dim0: Int = self.dim0
         let dim1: Int = self.dim1
@@ -1123,7 +1213,7 @@ struct Linear:
         if x.dim2 != self.in_features:
             print("Invalid input dimensions for Linear layer. Returning null matrix")
             return Matrix[float_dtype](0, 0, 0)
-
+        
         var output = x.matmul(self.weight.transpose(1,2))
 
         if self.use_bias:
