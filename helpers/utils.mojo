@@ -1021,6 +1021,15 @@ struct Conv2D:
         parallelize[init_kernel_fn](self.out_channels, self.out_channels)
         ####
 
+    fn __copyinit__(inout self, other: Self) -> None:
+        self.out_channels = other.out_channels
+        self.in_channels = other.in_channels
+        self.kernel_size = other.kernel_size
+        self.padding = other.padding
+        self.stride = other.stride
+        self.bias = other.bias
+        self.kernel = other.kernel
+
     fn forward(
         self,
         matrix: Matrix[float_dtype],
@@ -1120,6 +1129,14 @@ struct GroupNorm:
         self.beta = 0.0
         ###
 
+    fn __copyinit__(inout self, other: Self) -> None:
+        self.num_groups = other.num_groups
+        self.num_channels = other.num_channels
+        self.channels_per_group = other.channels_per_group
+        self.epsilon = other.epsilon
+        self.gamma = other.gamma
+        self.beta = other.beta
+
     fn forward(self, x: Matrix[float_dtype])  -> Matrix[float_dtype]:
         let output = Matrix[float_dtype](x.dim0, x.dim1, x.dim2)
 
@@ -1183,7 +1200,6 @@ struct SiLU:
 struct Linear:
     var in_features: Int
     var out_features: Int
-    var num_channels: Int
     var bias: Matrix[float_dtype]
     var weight: Matrix[float_dtype]
     var use_bias: Bool
@@ -1192,22 +1208,27 @@ struct Linear:
         inout self,
         in_features: Int,
         out_features: Int,
-        num_channels: Int = 1,
         use_bias : Bool = True,
     ) -> None:
         self.in_features = in_features
         self.out_features = out_features
-        self.num_channels = num_channels
         self.use_bias = use_bias
 
         ### LEARNABLE PARAMETERS: bias and weight
-        self.bias = Matrix[float_dtype](num_channels, 1, out_features)
+        self.bias = Matrix[float_dtype](1, 1, out_features)
         let k = math.sqrt(self.in_features)
         let inv_k = math.rsqrt[float_dtype, 1](k)
         self.bias.init_weights(-inv_k, inv_k)
-        self.weight = Matrix[float_dtype](num_channels, out_features, in_features)
+        self.weight = Matrix[float_dtype](1, out_features, in_features)
         self.weight.init_weights(-inv_k, inv_k)
         ###
+
+    fn __copyinit__(inout self, other: Self) -> None:
+        self.in_features = other.in_features
+        self.out_features = other.out_features
+        self.bias = other.bias
+        self.weight = other.weight
+        self.use_bias = other.use_bias
 
     fn forward(inout self, inout x: Matrix[float_dtype]) -> Matrix[float_dtype]:
         if x.dim2 != self.in_features:
@@ -1224,11 +1245,43 @@ struct Linear:
             fn channel_fn(i: Int):
                 @parameter
                 fn col_fn(j: Int):
-                    bias_matrix.set_items(i, slice(0, bias_matrix.dim1), j, self.bias[i, 0, j])
+                    bias_matrix.set_items(i, slice(0, bias_matrix.dim1), j, self.bias[0, 0, j])
                 
                 parallelize[col_fn](bias_matrix.dim1, bias_matrix.dim1)
 
-            parallelize[channel_fn](self.num_channels, self.num_channels)
+            parallelize[channel_fn](output.dim0, output.dim0)
             output = output + bias_matrix
+
+        return output
+
+
+struct Upsample:
+    var scale_factor: Int
+    fn __init__(inout self, scale_factor:Int=1) -> None:
+        self.scale_factor = scale_factor
+
+    fn forward(self, x: Matrix[float_dtype]) -> Matrix[float_dtype]:
+
+        if self.scale_factor < 1:
+            print("Invalid scale factor for upsampling. Returning null matrix")
+            return Matrix[float_dtype](0, 0, 0)
+
+        let new_height = x.dim1 * self.scale_factor
+        let new_width = x.dim2 * self.scale_factor
+        var output = Matrix[float_dtype](x.dim0, new_height, new_width)
+
+        @parameter
+        fn channel_fn(i: Int):
+            @parameter
+            fn row_fn(j: Int):
+                @parameter
+                fn col_fn[simd_width: Int](k: Int):
+                    let val = x.__getitem__(i, j // self.scale_factor, k // self.scale_factor)
+                    output.__setitem__(i, j, k, val)
+                vectorize_unroll[simd_width, simd_width, col_fn](new_width)
+
+            parallelize[row_fn](new_height, new_height)
+
+        parallelize[channel_fn](x.dim0, x.dim0)
 
         return output

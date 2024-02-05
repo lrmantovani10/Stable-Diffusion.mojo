@@ -12,14 +12,19 @@ struct Self_Attention:
         inout self,
         n_heads: Int,
         d_embedding: Int,
-        num_channels: Int,
         in_bias: Bool = True,
         out_bias: Bool = True,
     ):
-        self.in_proj = Linear(d_embedding, 3 * d_embedding, num_channels, in_bias)
-        self.out_proj = Linear(d_embedding, d_embedding, num_channels, out_bias)
+        self.in_proj = Linear(d_embedding, 3 * d_embedding, in_bias)
+        self.out_proj = Linear(d_embedding, d_embedding, out_bias)
         self.n_heads = n_heads
         self.d_head = d_embedding // self.n_heads
+
+    fn __copyinit__(inout self, other: Self_Attention):
+        self.in_proj = other.in_proj
+        self.out_proj = other.out_proj
+        self.n_heads = other.n_heads
+        self.d_head = other.d_head
 
     fn forward(
         inout self, inout x: Matrix[float_dtype], causal_mask: Bool = False
@@ -76,6 +81,14 @@ struct CrossAttention:
         self.out_proj = Linear(d_embedding, d_embedding, use_bias=out_bias)
         self.n_heads = n_heads
         self.d_head = d_embedding // n_heads
+
+    fn __copyinit__(inout self, other: CrossAttention):
+        self.q_proj = other.q_proj
+        self.k_proj = other.k_proj
+        self.v_proj = other.v_proj
+        self.out_proj = other.out_proj
+        self.n_heads = other.n_heads
+        self.d_head = other.d_head
 
     fn forward(
         inout self,
