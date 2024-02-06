@@ -11,6 +11,7 @@ alias float_base = Float32
 alias float_dtype = DType.float32
 alias tensor_type = Tensor[float_dtype]
 alias simd_width: Int = simdwidthof[float_dtype]()
+alias pi = 3.141592653589793238462643383279
 
 # Perform 2D tiling on the iteration space defined by end_x and end_y.
 fn tile_2d[tiled_fn: Tile2DFunc, stride_x: Int, stride_y: Int](end_x: Int, end_y: Int):
@@ -178,6 +179,126 @@ struct Matrix[dtype: DType]:
         self.dim1 = other.dim1
         self.dim2 = other.dim2
 
+    fn concat(inout self, other: Self, dim: Int) -> Self:
+        if dim < 0 or dim > 2:
+            print("Invalid dimension for concatenation. Returning null matrix")
+            return Self(0, 0, 0)
+
+        var new_matrix = Self(self.dim0 + other.dim0, self.dim1, self.dim2)
+        
+        if dim == 0:
+            if self.dim1 != other.dim1 or self.dim2 != other.dim2:
+                print("Non-matching dimensions for concatenation along the first axis. Returning null matrix")
+                return Self(0, 0, 0)
+
+            @parameter
+            fn concat_fn0_self(c: Int):
+                @parameter
+                fn row_fn0_self(y: Int):
+                    @parameter
+                    fn col_fn0_self[simd_width: Int](x: Int):
+                        let val = self.load[simd_width](c, y, x)
+                        new_matrix.store[simd_width](c, y, x, val)
+
+                    vectorize_unroll[simd_width, simd_width, col_fn0_self](self.dim2)
+
+                parallelize[row_fn0_self](self.dim1, self.dim1)
+
+            parallelize[concat_fn0_self](self.dim0, self.dim0)
+
+            @parameter
+            fn concat_fn0_other(c: Int):
+                @parameter
+                fn row_fn0_other(y: Int):
+                    @parameter
+                    fn col_fn0_other[simd_width: Int](x: Int):
+                        let val = other.load[simd_width](c, y, x)
+                        new_matrix.store[simd_width](c + self.dim0, y, x, val)
+
+                    vectorize_unroll[simd_width, simd_width, col_fn0_other](self.dim2)
+
+                parallelize[row_fn0_other](self.dim1, self.dim1)
+
+            parallelize[concat_fn0_self](other.dim0, other.dim0)
+
+            return new_matrix
+        elif dim == 1:
+            if self.dim0 != other.dim0 or self.dim2 != other.dim2:
+                print("Non-matching dimensions for concatenation along the second axis. Returning null matrix")
+                return Self(0, 0, 0)
+
+            new_matrix = Self(self.dim0, self.dim1 + other.dim1, self.dim2)
+
+            @parameter
+            fn concat_fn1_self(c: Int):
+                @parameter
+                fn row_fn1_self(y: Int):
+                    @parameter
+                    fn col_fn1_self[simd_width: Int](x: Int):
+                        let val = self.load[simd_width](c, y, x)
+                        new_matrix.store[simd_width](c, y, x, val)
+
+                    vectorize_unroll[simd_width, simd_width, col_fn1_self](self.dim2)
+
+                parallelize[row_fn1_self](self.dim1, self.dim1)
+
+            parallelize[concat_fn1_self](self.dim0, self.dim0)
+
+            @parameter
+            fn concat_fn1_other(c: Int):
+                @parameter
+                fn row_fn1_other(y: Int):
+                    @parameter
+                    fn col_fn1_other[simd_width: Int](x: Int):
+                        let val = other.load[simd_width](c, y, x)
+                        new_matrix.store[simd_width](c, y, x + self.dim1, val)
+
+                    vectorize_unroll[simd_width, simd_width, col_fn1_other](self.dim2)
+
+                parallelize[row_fn1_other](other.dim1, other.dim1)
+
+            parallelize[concat_fn1_other](other.dim0, other.dim0)
+
+        else:
+            if self.dim0 != other.dim0 or self.dim1 != other.dim1:
+                print("Non-matching dimensions for concatenation along the third axis. Returning null matrix")
+                return Self(0, 0, 0)
+
+            new_matrix = Self(self.dim0, self.dim1, self.dim2 + other.dim2)
+
+            @parameter
+            fn concat_fn2_self(c: Int):
+                @parameter
+                fn row_fn2_self(y: Int):
+                    @parameter
+                    fn col_fn2_self[simd_width: Int](x: Int):
+                        let val = self.load[simd_width](c, y, x)
+                        new_matrix.store[simd_width](c, y, x, val)
+
+                    vectorize_unroll[simd_width, simd_width, col_fn2_self](self.dim2)
+
+                parallelize[row_fn2_self](self.dim1, self.dim1)
+
+            parallelize[concat_fn2_self](self.dim0, self.dim0)
+
+            @parameter
+            fn concat_fn2_other(c: Int):
+                @parameter
+                fn row_fn2_other(y: Int):
+                    @parameter
+                    fn col_fn2_other[simd_width: Int](x: Int):
+                        let val = other.load[simd_width](c, y, x)
+                        new_matrix.store[simd_width](c, y, x + self.dim2, val)
+
+                    vectorize_unroll[simd_width, simd_width, col_fn2_other](other.dim2)
+
+                parallelize[row_fn2_other](other.dim1, other.dim1)
+
+            parallelize[concat_fn2_other](other.dim0, other.dim0)
+
+        return new_matrix
+
+
     fn to_long(inout self) -> Matrix[DType.float64]:
         var new_matrix = Matrix[DType.float64](self.dim0, self.dim1, self.dim2)
         
@@ -195,12 +316,12 @@ struct Matrix[dtype: DType]:
         var new_matrix = Matrix[DType.float32](self.dim0, self.dim1, self.dim2)
         
         @parameter
-        fn to_long_fn[width: Int](index: Int) -> None:
+        fn to_float_fn[width: Int](index: Int) -> None:
             let val = self._data.simd_load[width](index)
             let val_float32 = val.cast[DType.float32]()
             new_matrix._data.simd_store[width](index, val_float32)
 
-        vectorize[simd_width, to_long_fn](self.size().to_int())
+        vectorize[simd_width, to_float_fn](self.size().to_int())
         return new_matrix
 
     fn __adjust_slice__(self, inout span: slice, dim: Int) -> slice:
@@ -1254,6 +1375,23 @@ struct SiLU:
             matrix._data.simd_store[simd_width](idx, x_idx / (1 + math.exp(-x_idx)))
 
         vectorize_unroll[simd_width, simd_width, vec_sigmoid](matrix.size().to_int())
+
+        return matrix
+
+struct Gelu:
+    fn __init__(inout self) -> None:
+        pass
+
+    fn forward(self, x: Matrix[float_dtype]) -> Matrix[float_dtype]:
+        var matrix = x
+
+        @parameter
+        fn vec_gelu[simd_width: Int](idx: Int) -> None:
+            let x_idx = x._data.simd_load[simd_width](idx)
+            let cdf = 0.5 * (1 + math.tanh((math.sqrt[float_dtype, 1](2 / pi) * (x_idx + 0.044715 * x_idx ** 3))))
+            matrix._data.simd_store[simd_width](idx, x_idx * cdf)
+
+        vectorize_unroll[simd_width, simd_width, vec_gelu](matrix.size().to_int())
 
         return matrix
 
