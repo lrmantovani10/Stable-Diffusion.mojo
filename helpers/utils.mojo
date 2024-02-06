@@ -1,7 +1,7 @@
 from tensor import Tensor, TensorShape
 from algorithm import parallelize, vectorize, vectorize_unroll
 from algorithm import Static2DTileUnitFunc as Tile2DFunc
-from random import rand, random_float64
+from random import rand, random_float64, randn_float64
 from sys.info import simdwidthof
 from memory import memset_zero
 from sys.intrinsics import strided_load
@@ -58,6 +58,14 @@ fn Softmax(inout matrix: Matrix[float_dtype], dim:Int = 0) -> Matrix[float_dtype
         print("Invalid dimension for softmax. Returning null matrix")
         return Matrix[float_dtype](0, 0, 0)
 
+fn sigmoid(inout matrix: Matrix[float_dtype]) -> Matrix[float_dtype]:
+    var new_matrix = matrix * -1
+    new_matrix = new_matrix.exp()
+    new_matrix += 1
+    new_matrix = (new_matrix ** (-1))
+    return new_matrix
+
+
 struct Matrix_Array[dtype: DType]:
     var _data: DTypePointer[dtype]
     var matrix_shape: Tuple[Int, Int, Int]
@@ -85,6 +93,11 @@ struct Matrix_Array[dtype: DType]:
 
         parallelize[set_matrix](self.matrix_size, self.matrix_size)
 
+    fn __setitem__(inout self, owned c_index: Int, owned z_index: Int, owned y_index: Int, owned x_index: Int, new_val: float_base):
+        let memory_index = c_index * self.matrix_size + z_index * Tuple.get[1, Int](self.matrix_shape) * Tuple.get[2, Int](self.matrix_shape) + y_index * Tuple.get[2, Int](self.matrix_shape) + x_index
+        let new_val_SIMD = SIMD[dtype, 1].splat(new_val.cast[dtype]())
+        self._data[memory_index] = new_val_SIMD
+
     fn __getitem__(self, owned index: Int) -> Matrix[dtype]:
         let memory_index = index * self.matrix_size
         let dim0 = Tuple.get[0, Int](self.matrix_shape)
@@ -99,6 +112,15 @@ struct Matrix_Array[dtype: DType]:
         parallelize[get_matrix](self.matrix_size, self.matrix_size)
 
         return new_matrix
+
+    fn __add__(self, other: Matrix[dtype]) -> Matrix_Array[dtype]:
+        var out = Matrix_Array[dtype](self.num_elements, self.matrix_shape)
+        @parameter
+        fn add_fn(i: Int):
+            out[i] = (self[i] + other)
+        
+        parallelize[add_fn](self.num_elements, self.num_elements)
+        return out
 
     fn print(self):
         for i in range(self.num_elements):
@@ -137,11 +159,49 @@ struct Matrix[dtype: DType]:
 
         vectorize[1, init_weights_fn](self.size().to_int())
 
+    fn init_weights_normal(inout self, mean: float_base, std: float_base):
+        let mean_val = mean.cast[DType.float64]()
+        let std_val = std.cast[DType.float64]()
+
+        @parameter
+        fn init_weights_normal_fn[width: Int](index: Int) -> None:
+            let weight_val = randn_float64(mean_val, std_val)
+            let weight_simd = SIMD[DType.float64, width].splat(weight_val)
+            let weight_simd_dtype = weight_simd.cast[dtype]()
+            self._data.simd_store[width](index, weight_simd_dtype)
+
+        vectorize[1, init_weights_normal_fn](self.size().to_int())
+
     fn __copyinit__(inout self, other: Self):
         self._data = other._data
         self.dim0 = other.dim0
         self.dim1 = other.dim1
         self.dim2 = other.dim2
+
+    fn to_long(inout self) -> Matrix[DType.float64]:
+        var new_matrix = Matrix[DType.float64](self.dim0, self.dim1, self.dim2)
+        
+        @parameter
+        fn to_long_fn[width: Int](index: Int) -> None:
+            let val = self._data.simd_load[width](index)
+            let val_long = val.cast[DType.float64]()
+            new_matrix._data.simd_store[width](index, val_long)
+
+        vectorize[simd_width, to_long_fn](self.size().to_int())
+        return new_matrix
+
+
+    fn to_float32(inout self) -> Matrix[DType.float32]:
+        var new_matrix = Matrix[DType.float32](self.dim0, self.dim1, self.dim2)
+        
+        @parameter
+        fn to_long_fn[width: Int](index: Int) -> None:
+            let val = self._data.simd_load[width](index)
+            let val_float32 = val.cast[DType.float32]()
+            new_matrix._data.simd_store[width](index, val_float32)
+
+        vectorize[simd_width, to_long_fn](self.size().to_int())
+        return new_matrix
 
     fn __adjust_slice__(self, inout span: slice, dim: Int) -> slice:
         if span.start >= dim:
@@ -1285,3 +1345,47 @@ struct Upsample:
         parallelize[channel_fn](x.dim0, x.dim0)
 
         return output
+
+struct Embedding:
+    var n_vocab: Int
+    var n_embed: Int
+    var weight: Matrix[float_dtype]
+
+    fn __init__(inout self, n_vocab: Int, n_embed: Int) -> None:
+        self.n_vocab = n_vocab
+        self.n_embed = n_embed
+
+        ## LEARNABLE PARAMETER: Weight
+        self.weight = Matrix[float_dtype](1, n_vocab, n_embed)
+        self.weight.init_weights_normal(0, 1)
+
+    fn __copyinit__(inout self, other: Self) -> None:
+        self.n_vocab = other.n_vocab
+        self.n_embed = other.n_embed
+        self.weight = other.weight
+
+    fn forward(self, x: Matrix[float_dtype]) -> Matrix[float_dtype]:
+        var out = Matrix[float_dtype](x.dim0, x.dim1, x.dim2 * self.n_embed)
+        @parameter
+        fn channel_fn(channel_idx: Int):
+            @parameter
+            fn row_fn(row_idx: Int):
+                @parameter
+                fn col_fn[width: Int](col_idx: Int):
+                    let idx = int(x[channel_idx, row_idx, col_idx])
+                    var weight_value = self.weight[0, idx, slice(0, self.n_embed)]
+                    out.set_items(channel_idx, row_idx, slice(col_idx * self.n_embed, (col_idx + 1) * self.n_embed), weight_value)
+                vectorize_unroll[1, 1, col_fn](x.dim2)
+            parallelize[row_fn](x.dim1, x.dim1)
+        parallelize[channel_fn](x.dim0, x.dim0)
+        return out
+
+
+struct LayerNorm:
+    var group_norm: GroupNorm
+    fn __init__(inout self, n_embed: Int) -> None:
+        self.group_norm = GroupNorm(1, n_embed)
+
+    fn forward(self, x: Matrix[float_dtype]) -> Matrix[float_dtype]:
+        return self.group_norm.forward(x)
+        
