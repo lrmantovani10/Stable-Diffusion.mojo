@@ -69,7 +69,7 @@ struct Unet_Attention_Block:
 
     fn __init__(inout self, n_head: Int, n_embed: Int, d_context: Int = 768):
         let channels = n_head * n_embed
-        self.layer1 = GroupNorm(32, channels)
+        self.layer1 = GroupNorm(32, channels, epsilon=1e-6)
         self.layer2 = Conv2D(channels, channels, 1, (0, 0))
         self.layer3 = LayerNorm(channels)
         self.layer4 = Self_Attention(n_head, channels, in_bias=False)

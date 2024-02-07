@@ -1,2 +1,3 @@
 *.mojopkg
 test.py
+test.mojo

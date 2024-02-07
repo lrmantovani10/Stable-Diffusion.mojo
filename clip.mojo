@@ -29,7 +29,7 @@ struct ClipPlayer:
 
     fn __init__(inout self, n_embed: Int, n_head: Int):
         self.layer1 = LayerNorm(n_embed)
-        self.layer2 = Self_Attention(n_embed, n_head)
+        self.layer2 = Self_Attention(n_head, n_embed)
         self.layer3 = LayerNorm(n_embed)
         self.layer4 = Linear(n_embed, 4 * n_embed)
         self.layer5 = Linear(4 * n_embed, n_embed)

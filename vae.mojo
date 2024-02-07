@@ -1,6 +1,7 @@
 from helpers.utils import *
 from helpers.attention import *
 
+
 struct Attention_Block:
     var group_norm: GroupNorm
     var attention: Self_Attention
@@ -15,18 +16,16 @@ struct Attention_Block:
 
     fn forward(inout self, inout x: Matrix[float_dtype]) -> Matrix[float_dtype]:
         let residue = x
-        x = self.group_norm.forward(x)
-        let c = x.dim0
-        let h = x.dim1
-        let w = x.dim2
-        x = x.reshape(x.dim0, x.dim1 * x.dim2, 1)
-        x = x.transpose(0, 1)
-        x = self.attention.forward(x)
-        x = x.transpose(0, 1)
-        x = x.reshape(c, h, w)
-        x = x + residue
+        var out = self.group_norm.forward(x)
+        out = out.reshape(x.dim0, x.dim1 * x.dim2, 1)
+        out = out.transpose(0, 1)
+        out = self.attention.forward(out)
+        out = out.transpose(0, 1)
+        out = out.reshape(x.dim0, x.dim1, x.dim2)
+        out = out + residue
 
-        return x
+        return out
+
 
 struct Res_Block:
     var in_channels: Int
@@ -57,18 +56,16 @@ struct Res_Block:
 
     fn forward(self, inout x: Matrix[float_dtype]) -> Matrix[float_dtype]:
         var residue = x
-        x = self.group_norm1.forward(x)
-        x = SiLU().forward(x)
-        x = self.conv1.forward(x)
-        x = self.group_norm2.forward(x)
-        x = SiLU().forward(x)
-        x = self.conv2.forward(x)
+        var out = self.group_norm1.forward(x)
+        out = SiLU().forward(out)
+        out = self.conv1.forward(out)
+        out = self.group_norm2.forward(out)
+        out = SiLU().forward(out)
+        out = self.conv2.forward(out)
         if self.in_channels != self.out_channels:
             residue = self.res_conv_layer.forward(residue)
+        return out + residue
 
-        x = x + residue
-
-        return x
 
 struct Encoder:
     var l1: Conv2D
@@ -121,8 +118,8 @@ struct Encoder:
         self, matrix: Matrix[float_dtype], noise: Float32
     ) -> Matrix[float_dtype]:
         let chunks = matrix.chunk(1, 2)
-        var log_variance = chunks[0]
-        let mean = chunks[1]
+        let mean = chunks[0]
+        var log_variance = chunks[1]
         log_variance = log_variance.clamp(-30, 20)
         let variance = log_variance.exp()
         let std = variance.sqrt()
@@ -131,7 +128,7 @@ struct Encoder:
         return out
 
     fn forward(
-        inout self, x: Matrix[float_dtype], noise: Float32
+        inout self, x: Matrix[float_dtype], noise: float_base
     ) raises -> Matrix[float_dtype]:
         var out = x
         out = self.l1.forward(x)
@@ -160,6 +157,7 @@ struct Encoder:
 
         return out
 
+
 struct Decoder:
     var l1: Conv2D
     var l2: Conv2D
@@ -187,28 +185,29 @@ struct Decoder:
     var l24: GroupNorm
     var l25: SiLU
     var l26: Conv2D
+
     fn __init__(
         inout self,
     ) raises:
         self.l1 = Conv2D(4, 4, kernel_size=1, padding=(0, 0))
-        self.l2 = Conv2D(512, 4, kernel_size=3, padding=(1, 1))
+        self.l2 = Conv2D(4, 512, kernel_size=3, padding=(1, 1))
         self.l3 = Res_Block(512, 512)
         self.l4 = Attention_Block(512)
         self.l5 = Res_Block(512, 512)
         self.l6 = Res_Block(512, 512)
         self.l7 = Res_Block(512, 512)
         self.l8 = Res_Block(512, 512)
-        self.l9 = Upsample(scale_factor = 2)
+        self.l9 = Upsample(scale_factor=2)
         self.l10 = Conv2D(512, 512, kernel_size=3, padding=(1, 1))
         self.l11 = Res_Block(512, 512)
         self.l12 = Res_Block(512, 512)
         self.l13 = Res_Block(512, 512)
-        self.l14 = Upsample(scale_factor = 2)
+        self.l14 = Upsample(scale_factor=2)
         self.l15 = Conv2D(512, 512, kernel_size=3, padding=(1, 1))
         self.l16 = Res_Block(512, 256)
         self.l17 = Res_Block(256, 256)
         self.l18 = Res_Block(256, 256)
-        self.l19 = Upsample(scale_factor = 2)
+        self.l19 = Upsample(scale_factor=2)
         self.l20 = Conv2D(256, 256, kernel_size=3, padding=(1, 1))
         self.l21 = Res_Block(256, 128)
         self.l22 = Res_Block(128, 128)
@@ -217,9 +216,7 @@ struct Decoder:
         self.l25 = SiLU()
         self.l26 = Conv2D(128, 3, kernel_size=3, padding=(1, 1))
 
-    fn forward(
-        inout self, x: Matrix[float_dtype]
-    ) raises -> Matrix[float_dtype]:
+    fn forward(inout self, x: Matrix[float_dtype]) raises -> Matrix[float_dtype]:
         var out = x / 0.18215
         out = self.l1.forward(out)
         out = self.l2.forward(out)

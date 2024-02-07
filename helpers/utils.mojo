@@ -185,7 +185,7 @@ struct Matrix[dtype: DType]:
             return Self(0, 0, 0)
 
         var new_matrix = Self(self.dim0 + other.dim0, self.dim1, self.dim2)
-        
+
         if dim == 0:
             if self.dim1 != other.dim1 or self.dim2 != other.dim2:
                 print("Non-matching dimensions for concatenation along the first axis. Returning null matrix")
@@ -215,11 +215,11 @@ struct Matrix[dtype: DType]:
                         let val = other.load[simd_width](c, y, x)
                         new_matrix.store[simd_width](c + self.dim0, y, x, val)
 
-                    vectorize_unroll[simd_width, simd_width, col_fn0_other](self.dim2)
+                    vectorize_unroll[simd_width, simd_width, col_fn0_other](other.dim2)
 
-                parallelize[row_fn0_other](self.dim1, self.dim1)
+                parallelize[row_fn0_other](other.dim1, other.dim1)
 
-            parallelize[concat_fn0_self](other.dim0, other.dim0)
+            parallelize[concat_fn0_other](other.dim0, other.dim0)
 
             return new_matrix
         elif dim == 1:
@@ -251,9 +251,9 @@ struct Matrix[dtype: DType]:
                     @parameter
                     fn col_fn1_other[simd_width: Int](x: Int):
                         let val = other.load[simd_width](c, y, x)
-                        new_matrix.store[simd_width](c, y, x + self.dim1, val)
+                        new_matrix.store[simd_width](c, y + self.dim1, x, val)
 
-                    vectorize_unroll[simd_width, simd_width, col_fn1_other](self.dim2)
+                    vectorize_unroll[simd_width, simd_width, col_fn1_other](other.dim2)
 
                 parallelize[row_fn1_other](other.dim1, other.dim1)
 
@@ -1456,6 +1456,8 @@ struct Linear:
 struct Upsample:
     var scale_factor: Int
     fn __init__(inout self, scale_factor:Int=1) -> None:
+        if scale_factor < 1:
+            print("Invalid scale factor for upsampling!")
         self.scale_factor = scale_factor
 
     fn forward(self, x: Matrix[float_dtype]) -> Matrix[float_dtype]:
@@ -1474,9 +1476,9 @@ struct Upsample:
             fn row_fn(j: Int):
                 @parameter
                 fn col_fn[simd_width: Int](k: Int):
-                    let val = x.__getitem__(i, j // self.scale_factor, k // self.scale_factor)
-                    output.__setitem__(i, j, k, val)
-                vectorize_unroll[simd_width, simd_width, col_fn](new_width)
+                    let val = x.load[1](i, j // self.scale_factor, k // self.scale_factor)
+                    output.store[1](i, j, k, val)
+                vectorize_unroll[1, 1, col_fn](new_width)
 
             parallelize[row_fn](new_height, new_height)
 
@@ -1517,6 +1519,9 @@ struct Embedding:
             parallelize[row_fn](x.dim1, x.dim1)
         parallelize[channel_fn](x.dim0, x.dim0)
         return out
+
+    fn print(self) -> None:
+        self.weight.print()
 
 
 struct LayerNorm:

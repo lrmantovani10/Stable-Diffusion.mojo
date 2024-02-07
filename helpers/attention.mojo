@@ -38,7 +38,7 @@ struct Self_Attention:
         var v = chunked_input[2].reshape(x.dim0, self.n_heads, self.d_head)
         v = v.transpose(1, 2)
 
-        var weight = q.matmul(k.transpose(k.dim1, k.dim2))
+        var weight = q.matmul(k.transpose(1, 2))
 
         if causal_mask:
             var mask = Matrix[float_dtype](weight.dim0, weight.dim1, weight.dim2)
@@ -59,7 +59,7 @@ struct Self_Attention:
         return output
 
 
-struct CrossAttention:
+struct Cross_Attention:
     var n_heads: Int
     var d_head: Int
     var q_proj: Linear
@@ -82,7 +82,7 @@ struct CrossAttention:
         self.n_heads = n_heads
         self.d_head = d_embedding // n_heads
 
-    fn __copyinit__(inout self, other: CrossAttention):
+    fn __copyinit__(inout self, other: Cross_Attention):
         self.q_proj = other.q_proj
         self.k_proj = other.k_proj
         self.v_proj = other.v_proj
