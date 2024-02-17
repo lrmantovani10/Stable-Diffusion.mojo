@@ -5,13 +5,355 @@ from random import rand, random_float64, randn_float64
 from sys.info import simdwidthof
 from memory import memset_zero
 from sys.intrinsics import strided_load
-from math import trunc, mod
+from math import trunc, mod, cos, sin
+from random import random_ui64, seed
+from memory.buffer import Buffer
 
 alias float_base = Float32
 alias float_dtype = DType.float32
 alias tensor_type = Tensor[float_dtype]
 alias simd_width: Int = simdwidthof[float_dtype]()
 alias pi = 3.141592653589793238462643383279
+
+# This tokenizer-related section of the code was copied and then modified from the wonderful Mojo Llama2 project available here - https://github.com/tairov/llama2.mojo/blob/master/ 
+struct FileBuf:
+    var data: DTypePointer[DType.uint8]
+    var offset: Int
+    var size: Int
+
+    fn __init__(inout self):
+        self.data = DTypePointer[DType.uint8]()
+        self.offset = 0
+        self.size = 0
+
+    fn __del__(owned self):
+        self.data.free()
+
+    fn move_offset(inout self, size: Int) raises:
+        let new_offset = self.offset + size
+        if new_offset > self.size:
+            raise Error("Resulting offset will be past the end of the FileBuf")
+        if new_offset < 0:
+            raise Error("Resulting offset will be before the beginning of the FileBuf")
+        self.offset = new_offset
+
+    fn bitcast_offset_f32(inout self, size: Int) raises -> DTypePointer[DType.float32]:
+        let ret = self.data.offset(self.offset).bitcast[DType.float32]()
+        self.move_offset(size * sizeof[DType.float32]())
+        return ret
+
+    fn get_offset(self) raises -> Int:
+        if self.offset > self.size:
+            raise Error("Offset is past the end of the FileBuf")
+        if self.offset < 0:
+            raise Error("Offset is before the beginning of the FileBuf")
+        return self.offset
+
+fn read_file(file_name: String, inout buf: FileBuf):
+    try:
+        var fd = open(file_name, "r")
+        var data = fd.read()
+        fd.close()
+        buf.size = data._buffer.size
+        buf.data = data._steal_ptr().bitcast[DType.uint8]()
+        buf.offset = 0
+    except:
+        print("Error reading file")
+    return
+
+fn read_val_int(inout buf: FileBuf) -> Int:
+    try:
+        let data = buf.data.offset(buf.get_offset()).bitcast[DType.int32]()
+        let result = data.load(0)
+        buf.move_offset(4)
+        return result.to_int()
+    except:
+        print("Error reading int from tokenizer file")
+        return 0
+
+fn read_val_float32(inout buf: FileBuf) -> Float32:
+    try:
+        let val = buf.data.offset(buf.get_offset()).bitcast[DType.float32]().load(0)
+        buf.move_offset(4)
+        return val
+    except:
+        print("Error reading float32 from tokenizer file")
+        return 0
+
+fn read_val_str(inout buf: FileBuf, slen: Int) -> Pointer[UInt8]:
+    try:
+        let str = Pointer[UInt8].alloc(slen + 1)
+        for i in range(slen):
+            str.store(i, buf.data.load(buf.get_offset()))
+            buf.move_offset(1)
+        str.store(slen, 0)
+
+        return str
+    except:
+        print("Error reading string from tokenizer file")
+        return Pointer[UInt8].alloc(slen + 1)
+
+fn string_compare(a: Pointer[UInt8], b: Pointer[UInt8]) -> Int:
+    var index = 0
+    while a[index] != 0 and b[index] != 0:
+        if a[index] < b[index]:
+            return -1
+        if a[index] > b[index]:
+            return 1
+
+        index += 1
+
+    if a[index] != 0 and b[index] == 0:
+        return 1
+
+    if a[index] == 0 and b[index] != 0:
+        return -1
+
+    return 0
+
+fn partition(
+    inout array: Pointer[Pointer[UInt8]], inout indices: DynamicVector[Int], low: Int, high: Int
+) -> Int:
+    let pivot = array[high]
+    var ii = low - 1
+    for jj in range(low, high):
+        if string_compare(pivot, array[jj]) == 1:
+            ii = ii + 1
+
+            let tmp = array[ii]
+            let tmp_idx = indices[ii]
+            array.store(ii, array[jj])
+            indices[ii] = indices[jj]
+            array.store(jj, tmp)
+            indices[jj] = tmp_idx
+
+    let tmp = array[ii + 1]
+    let tmp_idx = indices[ii + 1]
+    array.store(ii + 1, array[high])
+    indices[ii + 1] = indices[high]
+    array.store(high, tmp)
+    indices[high] = tmp_idx
+
+    return ii + 1
+
+fn quicksort(
+    inout array: Pointer[Pointer[UInt8]], inout indices: DynamicVector[Int], low: Int, high: Int
+):
+    if low < high:
+        let pi = partition(array, indices, low, high)
+        quicksort(array, indices, low, pi - 1)
+        quicksort(array, indices, pi + 1, high)
+
+fn str_to_ptr(s: String) -> Pointer[UInt8]:
+    let ret = Pointer[UInt8].alloc(len(s) + 1)
+    for i in range(len(s)):
+        ret.store(i, ord(s[i]))
+    ret.store(len(s), 0)
+    return ret
+
+fn wrap(token: Pointer[UInt8]) -> Pointer[UInt8]:
+    if string_compare(token, str_to_ptr("\\n")) == 0:
+        return str_to_ptr("<0x0A>")
+    if string_compare(token, str_to_ptr("\\t")) == 0:
+        return str_to_ptr("<0x09>")
+    if string_compare(token, str_to_ptr("'")) == 0:
+        return str_to_ptr("<0x27>")
+    elif string_compare(token, str_to_ptr('"')) == 0:
+        return str_to_ptr("<0x22>")
+    return token
+
+fn str_len(s: Pointer[UInt8]) -> Int:
+    var len = 0
+    while s[len] != 0:
+        len += 1
+    return len
+
+fn str_concat(s1: Pointer[UInt8], s2: Pointer[UInt8]) -> Pointer[UInt8]:
+    let l1 = str_len(s1)
+    let l2 = str_len(s2)
+    let str = Pointer[UInt8].alloc(l1 + l2 + 1)
+    memcpy[UInt8](str, s1, l1)
+    memcpy[UInt8](str.offset(l1), s2, l2)
+    str.store(l1 + l2, 0)
+    return str
+
+struct Tokenizer:
+    var vocab: Pointer[Pointer[UInt8]]
+    var vocab_scores: DTypePointer[DType.float32]
+    var max_token_length: Int
+    var vocab_size: Int
+    var sorted_vocab: Pointer[Pointer[UInt8]]
+    var sorted_indices: DynamicVector[Int]
+
+    fn __init__(inout self, vocab_size: Int, inout buf: FileBuf) -> None:
+        self.vocab_size = vocab_size
+        self.max_token_length = read_val_int(buf)
+        self.vocab_scores = DTypePointer[DType.float32].alloc(self.vocab_size)
+        self.vocab = Pointer[Pointer[UInt8]].alloc(self.vocab_size)
+        self.sorted_vocab = Pointer[Pointer[UInt8]].alloc(0)
+        self.sorted_indices = DynamicVector[Int](0)
+
+        for i in range(0, self.vocab_size):
+            let score = read_val_float32(buf)
+            let slen = read_val_int(buf)
+            let token = read_val_str(buf, slen)
+            self.store_token(i, token, score)
+        return None
+
+    fn __copyinit__(inout self, other: Self):
+        self.vocab_size = other.vocab_size
+        self.max_token_length = other.max_token_length
+        self.vocab_scores = other.vocab_scores
+        self.vocab = other.vocab
+        self.sorted_vocab = other.sorted_vocab
+        self.sorted_indices = other.sorted_indices
+
+    fn __del__(owned self):
+        for i in range(0, self.vocab_size):
+            self.vocab[i].free()
+        self.vocab.free()
+        self.vocab_scores.free()
+        self.sorted_vocab.free()
+
+    fn store_token(
+        inout self, index: Int, owned token: Pointer[UInt8], score: Float32
+    ) -> None:
+        self.vocab_scores.store(index, score)
+        self.vocab.store(index, token)
+
+    fn sort(inout self) -> None:
+        if len(self.sorted_indices) < self.vocab_size:
+            self.sorted_indices = DynamicVector[Int](self.vocab_size)
+            self.sorted_vocab = Pointer[Pointer[UInt8]].alloc(self.vocab_size)
+            for ii in range(self.vocab_size):
+                self.sorted_vocab.store(ii, self.vocab[ii])
+                self.sorted_indices.push_back(ii)
+
+        let n = self.vocab_size
+        quicksort(self.sorted_vocab, self.sorted_indices, 0, n - 1)
+        return None
+
+    fn find(inout self, token_o: Pointer[UInt8]) -> Int:
+        let token = wrap(token_o)
+        let n = self.vocab_size
+        if len(self.sorted_indices) < n:
+            self.sort()
+        var left = 0
+        var right = n - 1
+        while left <= right:
+            let mid = left + (right - left) // 2
+            let comparison = string_compare(self.sorted_vocab[mid], token)
+            if comparison == 0:
+                return self.sorted_indices[mid]
+            if comparison < 0:
+                left = mid + 1
+            else:
+                right = mid - 1
+        return -1
+
+fn bpe_encode(text: String, inout tok: Tokenizer) -> DynamicVector[Int]:
+    var tokens = DynamicVector[Int]()
+    for pos in range(len(text)):
+        let char = str_to_ptr(text[pos])
+        let id = tok.find(char)
+        if id == -1:
+            print("Not a good prompt token at pos ", pos)
+            return tokens
+        tokens.push_back(id)
+
+    while True:
+        var best_score = Float32(-1e10)
+        var best_id = -1
+        var best_idx = -1
+
+        for i in range(len(tokens) - 1):
+            let str = str_concat(tok.vocab[tokens[i]], tok.vocab[tokens[i + 1]])
+            let id = tok.find(str)
+            if id != -1 and tok.vocab_scores.load(id) > best_score:
+                best_score = tok.vocab_scores.load(id)
+                best_id = id
+                best_idx = i
+
+        if best_idx == -1:
+            break
+
+        tokens[best_idx] = best_id
+        var _tokens = DynamicVector[Int]()
+        for i in range(0, best_idx + 1):
+            _tokens.push_back(tokens[i])
+        for i in range(best_idx + 2, len(tokens)):
+            _tokens.push_back(tokens[i])
+        tokens = _tokens
+    return tokens
+
+fn vector_to_matrix(vector: DynamicVector[Int]) -> Matrix[float_dtype]:
+    let total_size = len(vector)
+    var out_matrix = Matrix[float_dtype](1, 1, total_size)
+
+    @parameter
+    fn vector_to_matrix_fn[width: Int](index: Int):
+        let val = vector[index]
+        let val_simd = SIMD[float_dtype, width].splat(int(val))
+        out_matrix.store[width](0, 0, index, val_simd)
+
+    vectorize[1, vector_to_matrix_fn](total_size)
+    return out_matrix
+
+fn get_time_embedding(
+    timestep:Matrix[float_dtype]
+) -> Matrix[float_dtype]:
+    
+    var freqs = Matrix[float_dtype](1, 1, 160)
+    @parameter
+    fn time_range_fn[width: Int](index: Int):
+        let float_index: Float32 = index
+        let val:Float32 = (-float_index / 160) ** 10000
+        let val_simd = SIMD[float_dtype, width].splat(val)
+        freqs.store[width](0, 0, index, val_simd)
+
+    vectorize[1, time_range_fn](160)
+
+    var x = timestep.multiply(freqs)
+    var cos_x = x.cosine()
+    var sin_x = x.sine()
+    return cos_x.concat(sin_x, 2)
+
+fn gen_tokenizer(vocab_size: Int
+) -> Tokenizer:
+    var tokenizer = StringRef("tokenizer.bin")
+    var tokenizer_buffer = FileBuf()
+    read_file(tokenizer, tokenizer_buffer)
+    var tokenizer_instance = Tokenizer(vocab_size, tokenizer_buffer)
+    return tokenizer_instance
+
+fn resize_image(
+    image: Matrix[float_dtype], new_height: Int, new_width: Int
+) -> Matrix[float_dtype]:
+    let old_channels = image.dim0
+    let old_width = image.dim1
+    let old_height = image.dim2
+    var new_image = Matrix[float_dtype](old_channels, new_height, new_width)
+
+    let scale_y = old_height / new_height
+    let scale_x = old_width / new_width
+
+    @parameter
+    fn resize_channels(channel: Int):
+        @parameter
+        fn resize_row(row: Int):
+            @parameter
+            fn resize_image_fn[width: Int](col: Int):
+                let new_y = int(row * scale_y)
+                let new_x = int(col * scale_x)
+                let val = image.load[1](channel, new_y, new_x)
+                new_image.store[1](channel, row, col, val)
+
+            vectorize_unroll[1, 1, resize_image_fn](new_width)
+
+        parallelize[resize_row](new_height, new_height)
+
+    parallelize[resize_channels](old_channels, old_channels)
+    return new_image
 
 # Perform 2D tiling on the iteration space defined by end_x and end_y.
 fn tile_2d[tiled_fn: Tile2DFunc, stride_x: Int, stride_y: Int](end_x: Int, end_y: Int):
@@ -128,7 +470,6 @@ struct Matrix_Array[dtype: DType]:
             print("Matrix", i)
             self[i].print()
 
-
 # Check out https://github.com/modularml/mojo/blob/main/examples/blogs-videos/mojo-matrix-slice.ipynb
 struct Matrix[dtype: DType]:
     var dim0: Int
@@ -172,6 +513,42 @@ struct Matrix[dtype: DType]:
             self._data.simd_store[width](index, weight_simd_dtype)
 
         vectorize[1, init_weights_normal_fn](self.size().to_int())
+    
+    fn init_weights_seed(inout self, seed_val: Int = 0):
+        if seed_val == 0:
+            seed()
+        else:
+            seed(seed_val)
+        @parameter
+        fn init_weights_random_fn[width: Int](index: Int) -> None:
+            let weight_val = random_float64(1, 10000000)
+            let weight_simd = SIMD[DType.float64, width].splat(weight_val)
+            let weight_simd_dtype = weight_simd.cast[dtype]()
+            self._data.simd_store[width](index, weight_simd_dtype)
+
+        vectorize[1, init_weights_random_fn](self.size().to_int())
+
+    fn rescale(inout self, old_scale: Tuple, new_scale: Tuple, clamp: Bool = False) -> Matrix[dtype]:
+        let old_min = Tuple.get[0, Int](old_scale)
+        let old_max = Tuple.get[1, Int](old_scale)
+        let new_min = Tuple.get[0, Int](new_scale)
+        let new_max = Tuple.get[1, Int](new_scale)
+
+        var new_matrix = Matrix[dtype](self.dim0, self.dim1, self.dim2)
+
+        @parameter
+        fn rescale_fn[simd_width: Int](index: Int) -> None:
+            let old_val = self._data.simd_load[simd_width](index)
+            let new_val_float = (old_val - old_min) * (new_max - new_min) / (old_max - old_min) + new_min
+            let new_val = new_val_float.cast[dtype]()
+            new_matrix._data.simd_store[simd_width](index, new_val)
+
+        vectorize[simd_width, rescale_fn](self.size().to_int())
+        
+        if clamp:
+            new_matrix = new_matrix.clamp(new_min, new_max)
+
+        return new_matrix
 
     fn __copyinit__(inout self, other: Self):
         self._data = other._data
@@ -353,6 +730,32 @@ struct Matrix[dtype: DType]:
             index = dim - 1
         return index
 
+    fn cosine(inout self) -> Matrix[float_dtype]:
+        var new_matrix = Matrix[float_dtype](self.dim0, self.dim1, self.dim2)
+        
+        @parameter
+        fn cosine_fn[width: Int](index: Int) -> None:
+            let val = self._data.simd_load[1](index)
+            let val_simd = SIMD[DType.float32, 1].splat(val.cast[DType.float32]())
+            let val_cosine = cos[float_dtype, 1](val_simd)
+            new_matrix._data.simd_store[1](index, val_cosine)
+
+        vectorize[1, cosine_fn](self.size().to_int())
+        return new_matrix
+
+    fn sine(inout self) -> Matrix[float_dtype]:
+        var new_matrix = Matrix[float_dtype](self.dim0, self.dim1, self.dim2)
+        
+        @parameter
+        fn sine_fn[width: Int](index: Int) -> None:
+            let val = self._data.simd_load[1](index)
+            let val_simd = SIMD[DType.float32, 1].splat(val.cast[DType.float32]())
+            let val_sine = sin[float_dtype, 1](val_simd)
+            new_matrix._data.simd_store[width](index, val_sine)
+
+        vectorize[1, sine_fn](self.size().to_int())
+        return new_matrix
+    
     fn load[simd_width: Int](self, z: Int, y: Int, x: Int) -> SIMD[dtype, simd_width]:
         let index = z * self.dim2 * self.dim1 + y * self.dim2 + x
         return self._data.simd_load[simd_width](index)
@@ -766,6 +1169,33 @@ struct Matrix[dtype: DType]:
 
         vectorize[simd_width, pow_fn](self.size().to_int())
 
+    fn __sub__(self, other: Self) -> Self:
+        if self.dim0 != other.dim0 or self.dim1 != other.dim1 or self.dim2 != other.dim2:
+            print("Non-matching dimensions for subtraction. Returning null matrix")
+            return Self(0, 0, 0)
+
+        var new_matrix = Self(self.dim0, self.dim1, self.dim2)
+        new_matrix *= 0
+
+        @parameter
+        fn channel_fn(c: Int):
+            @parameter
+            fn row_fn(y: Int):
+                @parameter
+                fn col_fn[simd_width: Int](x: Int):
+                    let simd_val = self.load[simd_width](c, y, x)
+                    let simd_val2 = other.load[simd_width](c, y, x)
+                    let computed_val = simd_val.__sub__(simd_val2)
+                    new_matrix.store[simd_width](c, y, x, computed_val)
+
+                vectorize_unroll[simd_width, simd_width, col_fn](self.dim2)
+
+            parallelize[row_fn](self.dim1, self.dim1)
+
+        parallelize[channel_fn](self.dim0, self.dim0)
+
+        return new_matrix
+
     fn __add__(self, y: float_base)  -> Self:
         var new_matrix = Self(self.dim0, self.dim1, self.dim2)
         new_matrix.__copyinit__(self)
@@ -1042,7 +1472,7 @@ struct Matrix[dtype: DType]:
 
         return new_matrix
     
-    # This can be further optimized with tiling (for simplicity, I didn't use it here)
+    # This can be further optimized with tilingas you can check on the Mojo website. However, since I want to dynamically adjust the tile boundaries instead of assuming that the tile size will be a divisor of the tile function's boundaries, I didn't use it here.
     fn matmul(inout self, matrix: Self) -> Self:
         if self.dim2 != matrix.dim1:
             print("Non-matching dimensions for matrix multiplication. Returning null matrix")

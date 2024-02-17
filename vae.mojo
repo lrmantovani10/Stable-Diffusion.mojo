@@ -90,7 +90,7 @@ struct Encoder:
 
     fn __init__(
         inout self,
-    ) raises:
+    ):
         self.l1 = Conv2D(3, 128, kernel_size=3, padding=(1, 1))
         self.l2 = Res_Block(128, 128)
         self.l3 = Res_Block(128, 128)
@@ -115,7 +115,7 @@ struct Encoder:
         return matrix.pad((0, 1), (0, 1))
 
     fn metrics_evals(
-        self, matrix: Matrix[float_dtype], noise: Float32
+        self, matrix: Matrix[float_dtype], noise: Matrix[float_dtype]
     ) -> Matrix[float_dtype]:
         let chunks = matrix.chunk(1, 2)
         let mean = chunks[0]
@@ -123,13 +123,13 @@ struct Encoder:
         log_variance = log_variance.clamp(-30, 20)
         let variance = log_variance.exp()
         let std = variance.sqrt()
-        let out = mean + (std * noise)
+        let out = mean + (noise.multiply(std))
         out *= 0.18215
         return out
 
     fn forward(
-        inout self, x: Matrix[float_dtype], noise: float_base
-    ) raises -> Matrix[float_dtype]:
+        inout self, x: Matrix[float_dtype], noise: Matrix[float_dtype]
+    ) -> Matrix[float_dtype]:
         var out = x
         out = self.l1.forward(x)
         out = self.l2.forward(out)
@@ -188,7 +188,7 @@ struct Decoder:
 
     fn __init__(
         inout self,
-    ) raises:
+    ):
         self.l1 = Conv2D(4, 4, kernel_size=1, padding=(0, 0))
         self.l2 = Conv2D(4, 512, kernel_size=3, padding=(1, 1))
         self.l3 = Res_Block(512, 512)
@@ -216,7 +216,7 @@ struct Decoder:
         self.l25 = SiLU()
         self.l26 = Conv2D(128, 3, kernel_size=3, padding=(1, 1))
 
-    fn forward(inout self, x: Matrix[float_dtype]) raises -> Matrix[float_dtype]:
+    fn forward(inout self, x: Matrix[float_dtype]) -> Matrix[float_dtype]:
         var out = x / 0.18215
         out = self.l1.forward(out)
         out = self.l2.forward(out)
