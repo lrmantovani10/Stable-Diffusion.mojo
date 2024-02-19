@@ -49,7 +49,8 @@ struct Self_Attention:
             let neg_inf = math.limit.neginf[float_dtype]()
             weight = weight.masked_fill(mask, neg_inf)
 
-        weight = weight / math.sqrt(self.d_head)
+        let head_float: Float32 = self.d_head
+        weight = weight / math.sqrt(head_float)
         weight = Softmax(weight, dim=2)
         var output = weight.matmul(v)
         output = output.transpose(1, 2)
@@ -113,8 +114,8 @@ struct Cross_Attention:
         v = v.transpose(0, 1)
 
         var weight = q.matmul(k.transpose(1, 2))
-
-        weight = weight / math.sqrt(self.d_head)
+        let head_float: Float32 = self.d_head
+        weight = weight / math.sqrt(head_float)
         weight = Softmax(weight, dim=2)
         var output = weight.matmul(v)
         output = output.transpose(0, 1)

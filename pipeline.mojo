@@ -2,22 +2,23 @@ from helpers.utils import *
 from clip import CLIP
 from vae import Encoder, Decoder
 from diffusion import Diffusion
+from sampler import DDPMSampler
 
 
 fn generate(
     prompt: String,
     backup_prompt: String = "",
-    strength: Float16 = 0.8,
+    strength: Float32 = 0.8,
     cfg: Bool = True,
-    cfg_scale: Float16 = 7.5,
+    cfg_scale: Float32 = 7.5,
     inference_steps: Int = 50,
     seed_val: Int = 0,
     input_image: Matrix[float_dtype] = Matrix[float_dtype](0, 0, 0),
 ) -> Matrix[float_dtype]:
     if (
-        not SIMD[DType.float16, 1].splat(0.0)
+        not SIMD[DType.float32, 1].splat(0.0)
         <= strength
-        <= SIMD[DType.float16, 1].splat(1.0)
+        <= SIMD[DType.float32, 1].splat(1.0)
     ):
         print("Strength must be between 0 and 1. Returning empty matrix")
         return Matrix[float_dtype](0, 0, 0)
@@ -40,8 +41,8 @@ fn generate(
         var tokens = vector_to_matrix(tokens_vector)
         context = clip.forward(tokens)
 
-    # var sampler = DDPM(seed_val)
-    # sampler.set_inference_steps(n_inference_steps)
+    var sampler = DDPMSampler(seed_val)
+    sampler.set_inference_timesteps(inference_steps)
 
     let latents_shape = Tensor[DType.int64](4, 64, 64)
     var latents = Matrix[float_dtype](
@@ -56,19 +57,15 @@ fn generate(
         )
         encoder_noise.init_weights_seed(seed_val)
         latents = encoder.forward(rescaled_input, encoder_noise)
-        # sampler.set_strength(strength)
-        # latents = sampler.add_noise(latents, sampler.timesteps[0])
+        sampler.set_strength(strength)
+        latents = sampler.add_noise(latents, sampler.timesteps[0])
     else:
         latents.init_weights_seed(seed_val)
 
     var diffusion = Diffusion()
-
-    # Uncomment the line below and remove the line below it once sampler is completed
-    # num_timesteps = sampler.timesteps.size()
-    let num_timesteps = 1
+    let num_timesteps = sampler.timesteps.num_elements()
     for i in range(num_timesteps):
-        # let timestep = sampler.timesteps[i]
-        let timestep = Matrix[float_dtype](1, 1, 160)
+        let timestep = sampler.timesteps[i]
         var time_embedding = get_time_embedding(timestep)
         var model_input = latents
         if cfg:
@@ -87,7 +84,7 @@ fn generate(
                 conditional_output - backup_output
             ) * cfg_scale_f32 + backup_output
 
-        # latents = sampler.step(timestep, latents, model_output)
+        latents = sampler.step(int(timestep), latents, model_output)
 
     var decoder = Decoder()
     var images = decoder.forward(latents)

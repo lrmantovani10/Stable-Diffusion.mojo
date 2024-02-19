@@ -5,7 +5,7 @@ from random import rand, random_float64, randn_float64
 from sys.info import simdwidthof
 from memory import memset_zero
 from sys.intrinsics import strided_load
-from math import trunc, mod, cos, sin
+from math import trunc, mod, cos, sin, round
 from random import random_ui64, seed
 from memory.buffer import Buffer
 
@@ -14,6 +14,50 @@ alias float_dtype = DType.float32
 alias tensor_type = Tensor[float_dtype]
 alias simd_width: Int = simdwidthof[float_dtype]()
 alias pi = 3.141592653589793238462643383279
+
+fn linspace(start: Float32, end: Float32, steps: Int) -> Tensor[float_dtype]:
+    var step = (end - start) / (steps - 1)
+    var out = Tensor[float_dtype](steps)
+    for i in range(steps):
+        out[i] = start + step * i
+    return out
+
+fn arange(start: Float32, end: Float32, reverse:Bool = False) -> Tensor[float_dtype]:
+    var out: Tensor[float_dtype]
+    if not reverse:
+        out = Tensor[float_dtype](int(end - start))
+        for i in range(end - start):
+            out[i] = start + i
+    else:
+        out = Tensor[float_dtype](int(end - start))
+        for i in range(end - start):
+            out[i] = end - 1 - i
+    return out
+
+# Cumprod for a 1d tensor
+fn cumprod(tensor: Tensor[float_dtype]) -> Tensor[float_dtype]:
+    var out = Tensor[float_dtype](tensor.num_elements())
+    var acc:Float32 = 1
+    for i in range(tensor.num_elements()):
+        acc *= tensor[i]
+        out[i] = acc
+    return out
+
+fn round_tensor(tensor: Tensor[float_dtype]) -> Tensor[float_dtype]:
+    var out = Tensor[float_dtype](tensor.shape())
+    @parameter
+    fn round_fn[width: Int](index: Int):
+        let val = tensor.simd_load[width](index)
+        let val_round = round[float_dtype, width](val)
+        out.simd_store[width](index, val_round)
+    vectorize[simd_width, round_fn](tensor.num_elements())
+    return out
+
+fn get_tensor_values(tensor: Tensor[float_dtype], start_index: Int, end_index: Int) -> Tensor[float_dtype]:
+    var out = Tensor[float_dtype](end_index - start_index)
+    for i in range(start_index, end_index):
+        out[i - start_index] = tensor[i]
+    return out
 
 # This tokenizer-related section of the code was copied and then modified from the wonderful Mojo Llama2 project available here - https://github.com/tairov/llama2.mojo/blob/master/ 
 struct FileBuf:
@@ -299,8 +343,19 @@ fn vector_to_matrix(vector: DynamicVector[Int]) -> Matrix[float_dtype]:
     vectorize[1, vector_to_matrix_fn](total_size)
     return out_matrix
 
+fn tensor_to_matrix(tensor: Tensor[float_dtype]) -> Matrix[float_dtype]:
+    var out_matrix = Matrix[float_dtype](1,1, tensor.num_elements())
+
+    @parameter
+    fn tensor_to_matrix_fn[width: Int](index: Int):
+        let val = tensor.simd_load[width](index)
+        out_matrix._data.simd_store[width](index, val)
+
+    vectorize[simd_width, tensor_to_matrix_fn](tensor.num_elements())
+    return out_matrix
+
 fn get_time_embedding(
-    timestep:Matrix[float_dtype]
+    timestep:SIMD[float_dtype, 1]
 ) -> Matrix[float_dtype]:
     
     var freqs = Matrix[float_dtype](1, 1, 160)
@@ -313,7 +368,7 @@ fn get_time_embedding(
 
     vectorize[1, time_range_fn](160)
 
-    var x = timestep.multiply(freqs)
+    var x = freqs * timestep
     var cos_x = x.cosine()
     var sin_x = x.sine()
     return cos_x.concat(sin_x, 2)
@@ -1255,6 +1310,33 @@ struct Matrix[dtype: DType]:
             self._data.simd_store[simd_width](index, computed_val)
 
         vectorize[simd_width, sub_fn](self.size().to_int())
+    
+    fn __truediv__(self, other: Self) -> Self:
+        if self.dim0 != other.dim0 or self.dim1 != other.dim1 or self.dim2 != other.dim2:
+            print("Non-matching dimensions for division. Returning null matrix")
+            return Self(0, 0, 0)
+
+        var new_matrix = Self(self.dim0, self.dim1, self.dim2)
+        new_matrix *= 0
+
+        @parameter
+        fn channel_fn(c: Int):
+            @parameter
+            fn row_fn(y: Int):
+                @parameter
+                fn col_fn[simd_width: Int](x: Int):
+                    let simd_val = self.load[simd_width](c, y, x)
+                    let simd_val2 = other.load[simd_width](c, y, x)
+                    let computed_val = simd_val.__truediv__(simd_val2)
+                    new_matrix.store[simd_width](c, y, x, computed_val)
+
+                vectorize_unroll[simd_width, simd_width, col_fn](self.dim2)
+
+            parallelize[row_fn](self.dim1, self.dim1)
+
+        parallelize[channel_fn](self.dim0, self.dim0)
+
+        return new_matrix
 
     fn __truediv__(self, y: float_base)  -> Self:
         var new_matrix = Self(self.dim0, self.dim1, self.dim2)
