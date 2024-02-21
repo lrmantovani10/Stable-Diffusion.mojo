@@ -59,7 +59,7 @@ fn get_tensor_values(tensor: Tensor[float_dtype], start_index: Int, end_index: I
         out[i - start_index] = tensor[i]
     return out
 
-# This tokenizer-related section of the code was copied and then modified from the wonderful Mojo Llama2 project available here - https://github.com/tairov/llama2.mojo/blob/master/ 
+# This tokenizer-related section of the code was copied and then modified from the wonderful Mojo Llama2 project available here - https://github.com/tairov/llama2.mojo/blob/master/
 struct FileBuf:
     var data: DTypePointer[DType.uint8]
     var offset: Int
@@ -81,10 +81,14 @@ struct FileBuf:
             raise Error("Resulting offset will be before the beginning of the FileBuf")
         self.offset = new_offset
 
-    fn bitcast_offset_f32(inout self, size: Int) raises -> DTypePointer[DType.float32]:
-        let ret = self.data.offset(self.offset).bitcast[DType.float32]()
-        self.move_offset(size * sizeof[DType.float32]())
-        return ret
+    fn bitcast_offset_f32(inout self, size: Int) -> DTypePointer[DType.float32]:
+        try:
+            let ret = self.data.offset(self.offset).bitcast[DType.float32]()
+            self.move_offset(size * sizeof[DType.float32]())
+            return ret
+        except:
+            print("Error offsetting float32 while reading float from tokenizer file")
+            return DTypePointer[DType.float32]()
 
     fn get_offset(self) raises -> Int:
         if self.offset > self.size:
@@ -131,7 +135,6 @@ fn read_val_str(inout buf: FileBuf, slen: Int) -> Pointer[UInt8]:
             str.store(i, buf.data.load(buf.get_offset()))
             buf.move_offset(1)
         str.store(slen, 0)
-
         return str
     except:
         print("Error reading string from tokenizer file")
@@ -152,7 +155,6 @@ fn string_compare(a: Pointer[UInt8], b: Pointer[UInt8]) -> Int:
 
     if a[index] == 0 and b[index] != 0:
         return -1
-
     return 0
 
 fn partition(
@@ -244,14 +246,6 @@ struct Tokenizer:
             self.store_token(i, token, score)
         return None
 
-    fn __copyinit__(inout self, other: Self):
-        self.vocab_size = other.vocab_size
-        self.max_token_length = other.max_token_length
-        self.vocab_scores = other.vocab_scores
-        self.vocab = other.vocab
-        self.sorted_vocab = other.sorted_vocab
-        self.sorted_indices = other.sorted_indices
-
     fn __del__(owned self):
         for i in range(0, self.vocab_size):
             self.vocab[i].free()
@@ -299,12 +293,11 @@ fn bpe_encode(text: String, inout tok: Tokenizer) -> DynamicVector[Int]:
     var tokens = DynamicVector[Int]()
     for pos in range(len(text)):
         let char = str_to_ptr(text[pos])
-        let id = tok.find(char)
-        if id == -1:
+        let tok_id = tok.find(char)
+        if tok_id == -1:
             print("Not a good prompt token at pos ", pos)
             return tokens
-        tokens.push_back(id)
-
+        tokens.push_back(tok_id)
     while True:
         var best_score = Float32(-1e10)
         var best_id = -1
@@ -313,8 +306,9 @@ fn bpe_encode(text: String, inout tok: Tokenizer) -> DynamicVector[Int]:
         for i in range(len(tokens) - 1):
             let str = str_concat(tok.vocab[tokens[i]], tok.vocab[tokens[i + 1]])
             let id = tok.find(str)
-            if id != -1 and tok.vocab_scores.load(id) > best_score:
-                best_score = tok.vocab_scores.load(id)
+            let loaded_score = tok.vocab_scores.load(id)
+            if id != -1 and loaded_score > best_score:
+                best_score = loaded_score
                 best_id = id
                 best_idx = i
 
@@ -372,14 +366,6 @@ fn get_time_embedding(
     var cos_x = x.cosine()
     var sin_x = x.sine()
     return cos_x.concat(sin_x, 2)
-
-fn gen_tokenizer(vocab_size: Int
-) -> Tokenizer:
-    var tokenizer = StringRef("tokenizer.bin")
-    var tokenizer_buffer = FileBuf()
-    read_file(tokenizer, tokenizer_buffer)
-    var tokenizer_instance = Tokenizer(vocab_size, tokenizer_buffer)
-    return tokenizer_instance
 
 fn resize_image(
     image: Matrix[float_dtype], new_height: Int, new_width: Int
@@ -1832,7 +1818,6 @@ struct GroupNorm:
 
     fn forward(self, x: Matrix[float_dtype])  -> Matrix[float_dtype]:
         let output = Matrix[float_dtype](x.dim0, x.dim1, x.dim2)
-
         if self.num_channels > x.dim0:
             print("Number of channels exceeds the number of channels in the input matrix. Returning null matrix")
             return Matrix[float_dtype](0, 0, 0)
@@ -2017,7 +2002,7 @@ struct Embedding:
         self.weight = other.weight
 
     fn forward(self, x: Matrix[float_dtype]) -> Matrix[float_dtype]:
-        var out = Matrix[float_dtype](x.dim0, x.dim1, x.dim2 * self.n_embed)
+        var out = Matrix[float_dtype](1, x.dim2, self.n_embed)
         @parameter
         fn channel_fn(channel_idx: Int):
             @parameter
@@ -2027,9 +2012,9 @@ struct Embedding:
                     let idx = int(x[channel_idx, row_idx, col_idx])
                     var weight_value = self.weight[0, idx, slice(0, self.n_embed)]
                     out.set_items(channel_idx, row_idx, slice(col_idx * self.n_embed, (col_idx + 1) * self.n_embed), weight_value)
-                vectorize_unroll[1, 1, col_fn](x.dim2)
-            parallelize[row_fn](x.dim1, x.dim1)
-        parallelize[channel_fn](x.dim0, x.dim0)
+                vectorize_unroll[1, 1, col_fn](self.n_embed)
+            parallelize[row_fn](x.dim2, x.dim2)
+        parallelize[channel_fn](1, 1)
         return out
 
     fn print(self) -> None:

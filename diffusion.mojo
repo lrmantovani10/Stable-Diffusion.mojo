@@ -244,7 +244,10 @@ struct UNet:
         inout time: Matrix[float_dtype],
     ) -> Matrix[float_dtype]:
         # Encoders
+        print("encoder checkpoint1")
         var out = self.layer1.forward(x)
+        print("encoder checkpoint1.1")
+        out.print_dims()
         self.skip1 = out
         out = self.layer2.forward(out, time)
         out = self.layer3.forward(out, context)
@@ -262,6 +265,7 @@ struct UNet:
         self.skip6 = out
         out = self.layer11.forward(out)
         self.skip7 = out
+        print("encoder checkpoint2")
         out = self.layer12.forward(out, time)
         out = self.layer13.forward(out, context)
         self.skip8 = out
@@ -274,15 +278,18 @@ struct UNet:
         self.skip11 = out
         out = self.layer18.forward(out, time)
         self.skip12 = out
+        print("encoder checkpoint3")
 
         # Bottlenecks
         out = self.layer19.forward(out, time)
+        print("bottleneck checkpoint1")
         out = self.layer20.forward(out, context)
         out = self.layer21.forward(out, time)
-
+        print("bottleneck checkpoint2")
         # Decoders
         out = out.concat(self.skip1, 1)
         out = self.layer22.forward(out, time)
+        print("decoder checkpoint1")
         out = out.concat(self.skip2, 1)
         out = self.layer23.forward(out, time)
         out = out.concat(self.skip3, 1)
@@ -291,6 +298,7 @@ struct UNet:
         out = out.concat(self.skip4, 1)
         out = self.layer26.forward(out, time)
         out = self.layer27.forward(out, context)
+        print("decoder checkpoint2")
         out = out.concat(self.skip5, 1)
         out = self.layer28.forward(out, time)
         out = self.layer29.forward(out, context)
@@ -298,6 +306,7 @@ struct UNet:
         out = self.layer30.forward(out, time)
         out = self.layer31.forward(out, context)
         out = self.layer32.forward(out)
+        print("decoder checkpoint4")
         out = out.concat(self.skip7, 1)
         out = self.layer33.forward(out, time)
         out = self.layer34.forward(out, context)
@@ -308,6 +317,7 @@ struct UNet:
         out = self.layer37.forward(out, time)
         out = self.layer38.forward(out, context)
         out = self.layer39.forward(out)
+        print("decoder checkpoint5")
         out = out.concat(self.skip10, 1)
         out = self.layer40.forward(out, time)
         out = self.layer41.forward(out, context)
@@ -315,6 +325,7 @@ struct UNet:
         out = self.layer42.forward(out, time)
         out = self.layer43.forward(out, context)
         out = out.concat(self.skip12, 1)
+        print("decoder checkpoint6")
         out = self.layer44.forward(out, time)
         out = self.layer45.forward(out, context)
 

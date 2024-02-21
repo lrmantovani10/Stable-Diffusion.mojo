@@ -24,22 +24,30 @@ fn generate(
         return Matrix[float_dtype](0, 0, 0)
 
     var clip = CLIP()
+    var tokenizer_ref = StringRef("tokenizer_clip.bin")
+    var tokenizer_buffer = FileBuf()
+    read_file(tokenizer_ref, tokenizer_buffer)
 
-    # Using a vocab size of 10000
-    var tokenizer = gen_tokenizer(10000)
+    # Using a vocab size of 49408, since we rely on the CLIP Tokenizer
+    var tokenizer = Tokenizer(49408, tokenizer_buffer)
     var context: Matrix[float_dtype]
+    let processed_prompt = prompt.replace(" ", "</w>")
+    let processed_backup = backup_prompt.replace(" ", "</w>")
     if cfg:
-        let cond_tokens_vector = bpe_encode(prompt, tokenizer)
+        var prompt_tokens = DynamicVector[Int]()
+        let cond_tokens_vector = bpe_encode(processed_prompt, tokenizer)
         var cond_tokens = vector_to_matrix(cond_tokens_vector)
         var cond_context = clip.forward(cond_tokens)
-        let backup_tokens_vector = bpe_encode(backup_prompt, tokenizer)
+        let backup_tokens_vector = bpe_encode(processed_backup, tokenizer)
         var backup_tokens = vector_to_matrix(backup_tokens_vector)
         let backup_context = clip.forward(backup_tokens)
         context = cond_context.concat(backup_context, dim=0)
     else:
-        let tokens_vector = bpe_encode(prompt, tokenizer)
+        let tokens_vector = bpe_encode(processed_prompt, tokenizer)
         var tokens = vector_to_matrix(tokens_vector)
         context = clip.forward(tokens)
+
+    print("CLIP forward pass concluded")
 
     var sampler = DDPMSampler(seed_val)
     sampler.set_inference_timesteps(inference_steps)
@@ -61,17 +69,17 @@ fn generate(
         latents = sampler.add_noise(latents, sampler.timesteps[0])
     else:
         latents.init_weights_seed(seed_val)
-
     var diffusion = Diffusion()
     let num_timesteps = sampler.timesteps.num_elements()
     for i in range(num_timesteps):
         let timestep = sampler.timesteps[i]
         var time_embedding = get_time_embedding(timestep)
+        print("CHECKPOINT - time embedding generated")
         var model_input = latents
         if cfg:
             model_input = model_input.concat(model_input, dim=0)
-
         var model_output = diffusion.forward(model_input, context, time_embedding)
+        print("Diffusion forward pass concluded")
 
         if cfg:
             let chunked_output = model_output.chunk(0, 2)
@@ -88,5 +96,6 @@ fn generate(
 
     var decoder = Decoder()
     var images = decoder.forward(latents)
+    print("Decoder forward pass concluded")
     images = images.rescale((-1, 1), (0, 255), clamp=True)
     return images[0, :, :]

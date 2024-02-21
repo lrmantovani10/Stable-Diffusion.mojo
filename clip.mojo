@@ -27,7 +27,7 @@ struct ClipPlayer:
     var layer4: Linear
     var layer5: Linear
 
-    fn __init__(inout self, n_embed: Int, n_head: Int):
+    fn __init__(inout self, n_head: Int, n_embed: Int):
         self.layer1 = LayerNorm(n_embed)
         self.layer2 = Self_Attention(n_head, n_embed)
         self.layer3 = LayerNorm(n_embed)
@@ -36,11 +36,15 @@ struct ClipPlayer:
 
     fn forward(inout self, x: Matrix[float_dtype]) -> Matrix[float_dtype]:
         var residue = x
-        var out = self.layer1.forward(x)
+        var first_input = residue.transpose(0, 2)
+        var out = self.layer1.forward(first_input)
+        out = out.transpose(0, 2)
         out = self.layer2.forward(out, causal_mask=True)
         out = out + residue
         residue = out
+        out = out.transpose(0, 2)
         out = self.layer3.forward(out)
+        out = out.transpose(0, 2)
         out = self.layer4.forward(out)
         var out_multiplied = out * 1.702
         out = out.multiply(sigmoid(out_multiplied))
@@ -83,7 +87,10 @@ struct CLIP:
 
     fn forward(inout self, inout tokens: Matrix[float_dtype]) -> Matrix[float_dtype]:
         # Here, we do not convert "state" to the long type (float64)for simplicity in Mojo type handling, but in production it would be useful to copy and paste the body of all these functions with type float64 instead of float32
-        var state = self.embedding.forward(tokens)
+        var reshaped_tokens = Matrix[float_dtype](1, 1, 77)
+        reshaped_tokens *= 0
+        reshaped_tokens.set_items(0, 0, slice(0, tokens.dim2), tokens)
+        var state = self.embedding.forward(reshaped_tokens)
         state = self.player1.forward(state)
         state = self.player2.forward(state)
         state = self.player3.forward(state)
@@ -96,5 +103,7 @@ struct CLIP:
         state = self.player10.forward(state)
         state = self.player11.forward(state)
         state = self.player12.forward(state)
-        let output = self.layer_norm.forward(state)
+        state = state.transpose(0, 2)
+        var output = self.layer_norm.forward(state)
+        output = output.transpose(0, 2)
         return output

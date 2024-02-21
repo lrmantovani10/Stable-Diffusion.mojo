@@ -30,13 +30,9 @@ struct Self_Attention:
         inout self, inout x: Matrix[float_dtype], causal_mask: Bool = False
     ) -> Matrix[float_dtype]:
         var chunked_input = self.in_proj.forward(x).chunk(2, 3)
-
-        var q = chunked_input[0].reshape(x.dim0, self.n_heads, self.d_head)
-        q = q.transpose(1, 2)
-        var k = chunked_input[1].reshape(x.dim0, self.n_heads, self.d_head)
-        k = k.transpose(1, 2)
-        var v = chunked_input[2].reshape(x.dim0, self.n_heads, self.d_head)
-        v = v.transpose(1, 2)
+        var q = chunked_input[0].reshape(self.n_heads, x.dim1, self.d_head)
+        var k = chunked_input[1].reshape(self.n_heads, x.dim1, self.d_head)
+        var v = chunked_input[2].reshape(self.n_heads, x.dim1, self.d_head)
 
         var weight = q.matmul(k.transpose(1, 2))
 

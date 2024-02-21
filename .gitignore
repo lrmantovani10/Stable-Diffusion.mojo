@@ -1,3 +1,5 @@
 *.mojopkg
 test.py
 test.mojo
+clip_tokenizer/
+tokenizer_clip.bin
