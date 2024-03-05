@@ -10,6 +10,10 @@ struct Time_Embedding:
         self.layer1 = Linear(n_embed, 4 * n_embed)
         self.layer2 = Linear(4 * n_embed, 4 * n_embed)
 
+    fn __copyinit__(inout self, other: Self):
+        self.layer1 = other.layer1
+        self.layer2 = other.layer2
+
     fn forward(inout self, inout x: Matrix[float_dtype]) -> Matrix[float_dtype]:
         var out = self.layer1.forward(x)
         out = SiLU().forward(out)
@@ -27,7 +31,7 @@ struct Unet_Residual_Block:
     var in_channels: Int
     var out_channels: Int
 
-    fn __init__(inout self, in_channels: Int, out_channels: Int, n_time: Int = 1280):
+    fn __init__(inout self, in_channels: Int, out_channels: Int, n_time: Int = 128):
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.layer1 = GroupNorm(32, in_channels)
@@ -36,6 +40,16 @@ struct Unet_Residual_Block:
         self.layer4 = GroupNorm(32, out_channels)
         self.layer5 = Conv2D(out_channels, out_channels, 3, (1, 1))
         self.layer6 = Conv2D(in_channels, out_channels, 1, (0, 0))
+
+    fn __copyinit__(inout self, other: Self):
+        self.layer1 = other.layer1
+        self.layer2 = other.layer2
+        self.layer3 = other.layer3
+        self.layer4 = other.layer4
+        self.layer5 = other.layer5
+        self.layer6 = other.layer6
+        self.in_channels = other.in_channels
+        self.out_channels = other.out_channels
 
     fn forward(
         inout self, x: Matrix[float_dtype], time: Matrix[float_dtype]
@@ -46,9 +60,12 @@ struct Unet_Residual_Block:
         out = self.layer2.forward(out)
         var time_new = SiLU().forward(time)
         time_new = self.layer3.forward(time_new)
+        time_new = time_new.reshape(self.out_channels, 1, 1)
+        time_new = time_new.broadcast_channel(out.dim1, out.dim2)
         var merged = out + time_new
         merged = self.layer4.forward(merged)
         merged = SiLU().forward(merged)
+
         merged = self.layer5.forward(merged)
         if self.in_channels != self.out_channels:
             return merged + self.layer6.forward(residue)
@@ -80,6 +97,18 @@ struct Unet_Attention_Block:
         self.layer9 = Linear(4 * channels, channels)
         self.layer10 = Conv2D(channels, channels, 1, (0, 0))
 
+    fn __copyinit__(inout self, other: Self):
+        self.layer1 = other.layer1
+        self.layer2 = other.layer2
+        self.layer3 = other.layer3
+        self.layer4 = other.layer4
+        self.layer5 = other.layer5
+        self.layer6 = other.layer6
+        self.layer7 = other.layer7
+        self.layer8 = other.layer8
+        self.layer9 = other.layer9
+        self.layer10 = other.layer10
+
     fn forward(
         inout self, x: Matrix[float_dtype], inout context: Matrix[float_dtype]
     ) -> Matrix[float_dtype]:
@@ -88,23 +117,39 @@ struct Unet_Attention_Block:
         out = self.layer2.forward(out)
         out = out.reshape(1, out.dim0, out.dim1 * out.dim2)
         out = out.transpose(1, 2)
+        out = out.transpose(0, 2)
         var residue_short = out
         out = self.layer3.forward(out)
+        out = out.transpose(0, 2)
         out = self.layer4.forward(out)
+        residue_short = residue_short.transpose(0, 2)
         out = out + residue_short
         residue_short = out
+        out = out.transpose(0, 2)
         out = self.layer5.forward(out)
+        out = out.transpose(0, 2)
+
         out = self.layer6.forward(out, context)
         out = out + residue_short
         residue_short = out
+        out = out.transpose(0, 2)
         out = self.layer7.forward(out)
-
-        let chunked_linear = self.layer8.forward(out).chunk(1, 2)
+        out = out.transpose(0, 2)
+        let chunked_linear = self.layer8.forward(out).chunk(2, 2)
         out = chunked_linear[0]
         var gate = chunked_linear[1]
-
+        out = out.transpose(1, 2)
         out = out.matmul(Gelu().forward(gate))
         out = self.layer9.forward(out)
+
+        ## In these lines, I am concatenating the "out" variable multiple times because the latent space dimension (128 rows here) is much smaller than the "residue short" variable, which was constructed from a real Stable Diffusion tokenizer (which is why it has 4096 rows).
+        # However, this should not be done in production. The correct approach is either to use a smaller tokenizer or a larger latent space.
+        let original_out = out
+        let diff = residue_short.dim1 // out.dim1 - 1
+        if diff > 0:
+            for _ in range(residue_short.dim1 // out.dim1 - 1):
+                out = out.concat(original_out, 1)
+
         out = out + residue_short
         out = out.transpose(1, 2)
         out = out.reshape(x.dim0, x.dim1, x.dim2)
@@ -112,6 +157,7 @@ struct Unet_Attention_Block:
         return out
 
 
+# A much smaller UNet compared to the original Stable Diffusion's
 struct UNet:
     var layer1: Conv2D
     var layer2: Unet_Residual_Block
@@ -123,119 +169,72 @@ struct UNet:
     var layer8: Unet_Attention_Block
     var layer9: Unet_Residual_Block
     var layer10: Unet_Attention_Block
-    var layer11: Conv2D
-    var layer12: Unet_Residual_Block
-    var layer13: Unet_Attention_Block
+    var layer11: Unet_Residual_Block
+    var layer12: Unet_Attention_Block
+    var layer13: Upsample
     var layer14: Unet_Residual_Block
     var layer15: Unet_Attention_Block
-    var layer16: Conv2D
-    var layer17: Unet_Residual_Block
-    var layer18: Unet_Residual_Block
-    var layer19: Unet_Residual_Block
-    var layer20: Unet_Attention_Block
-    var layer21: Unet_Residual_Block
-    var layer22: Unet_Residual_Block
-    var layer23: Unet_Residual_Block
-    var layer24: Unet_Residual_Block
-    var layer25: Upsample
-    var layer26: Unet_Residual_Block
-    var layer27: Unet_Attention_Block
-    var layer28: Unet_Residual_Block
-    var layer29: Unet_Attention_Block
-    var layer30: Unet_Residual_Block
-    var layer31: Unet_Attention_Block
-    var layer32: Upsample
-    var layer33: Unet_Residual_Block
-    var layer34: Unet_Attention_Block
-    var layer35: Unet_Residual_Block
-    var layer36: Unet_Attention_Block
-    var layer37: Unet_Residual_Block
-    var layer38: Unet_Attention_Block
-    var layer39: Upsample
-    var layer40: Unet_Residual_Block
-    var layer41: Unet_Attention_Block
-    var layer42: Unet_Residual_Block
-    var layer43: Unet_Attention_Block
-    var layer44: Unet_Residual_Block
-    var layer45: Unet_Attention_Block
+    var layer16: Unet_Residual_Block
+    var layer17: Unet_Attention_Block
     var skip1: Matrix[float_dtype]
     var skip2: Matrix[float_dtype]
     var skip3: Matrix[float_dtype]
     var skip4: Matrix[float_dtype]
-    var skip5: Matrix[float_dtype]
-    var skip6: Matrix[float_dtype]
-    var skip7: Matrix[float_dtype]
-    var skip8: Matrix[float_dtype]
-    var skip9: Matrix[float_dtype]
-    var skip10: Matrix[float_dtype]
-    var skip11: Matrix[float_dtype]
-    var skip12: Matrix[float_dtype]
 
     fn __init__(inout self):
         # Encoders
-        self.layer1 = Conv2D(4, 320, 3, (1, 1))
-        self.layer2 = Unet_Residual_Block(320, 320)
-        self.layer3 = Unet_Attention_Block(8, 40)
-        self.layer4 = Unet_Residual_Block(320, 320)
-        self.layer5 = Unet_Attention_Block(8, 40)
-        self.layer6 = Conv2D(320, 320, 3, (1, 1), stride=(2, 2))
-        self.layer7 = Unet_Residual_Block(320, 640)
-        self.layer8 = Unet_Attention_Block(8, 80)
-        self.layer9 = Unet_Residual_Block(640, 640)
-        self.layer10 = Unet_Attention_Block(8, 80)
-        self.layer11 = Conv2D(640, 640, 3, (1, 1), stride=(2, 2))
-        self.layer12 = Unet_Residual_Block(640, 1280)
-        self.layer13 = Unet_Attention_Block(8, 160)
-        self.layer14 = Unet_Residual_Block(1280, 1280)
-        self.layer15 = Unet_Attention_Block(8, 160)
-        self.layer16 = Conv2D(1280, 1280, 3, (1, 1), stride=(2, 2))
-        self.layer17 = Unet_Residual_Block(1280, 1280)
-        self.layer18 = Unet_Residual_Block(1280, 1280)
+        self.layer1 = Conv2D(4, 32, 3, (1, 1))
+        self.layer2 = Unet_Residual_Block(32, 32)
+        self.layer3 = Unet_Attention_Block(8, 4)
+        self.layer4 = Unet_Residual_Block(32, 32)
+        self.layer5 = Unet_Attention_Block(8, 4)
+        self.layer6 = Conv2D(32, 32, 3, (1, 1))
 
-        # Bottlenecks
-        self.layer19 = Unet_Residual_Block(1280, 1280)
-        self.layer20 = Unet_Attention_Block(8, 160)
-        self.layer21 = Unet_Residual_Block(1280, 1280)
+        # Bottleneck
+        self.layer7 = Unet_Residual_Block(32, 64)
+        self.layer8 = Unet_Attention_Block(8, 8)
 
         # Decoders
-        self.layer22 = Unet_Residual_Block(2560, 1280)
-        self.layer23 = Unet_Residual_Block(2560, 1280)
-        self.layer24 = Unet_Residual_Block(2560, 1280)
-        self.layer25 = Upsample(1280)
-        self.layer26 = Unet_Residual_Block(2560, 1280)
-        self.layer27 = Unet_Attention_Block(8, 160)
-        self.layer28 = Unet_Residual_Block(2560, 1280)
-        self.layer29 = Unet_Attention_Block(8, 160)
-        self.layer30 = Unet_Residual_Block(1920, 640)
-        self.layer31 = Unet_Attention_Block(8, 160)
-        self.layer32 = Upsample(1280)
-        self.layer33 = Unet_Residual_Block(1920, 640)
-        self.layer34 = Unet_Attention_Block(8, 80)
-        self.layer35 = Unet_Residual_Block(1280, 640)
-        self.layer36 = Unet_Attention_Block(8, 80)
-        self.layer37 = Unet_Residual_Block(960, 640)
-        self.layer38 = Unet_Attention_Block(8, 80)
-        self.layer39 = Upsample(640)
-        self.layer40 = Unet_Residual_Block(960, 320)
-        self.layer41 = Unet_Attention_Block(8, 40)
-        self.layer42 = Unet_Residual_Block(640, 320)
-        self.layer43 = Unet_Attention_Block(8, 40)
-        self.layer44 = Unet_Residual_Block(640, 320)
-        self.layer45 = Unet_Attention_Block(8, 40)
+        self.layer9 = Unet_Residual_Block(96, 64)
+        self.layer10 = Unet_Attention_Block(8, 8)
+
+        # Here I use a very small upsampling factor for demonstrative purposes
+        self.layer11 = Unet_Residual_Block(96, 32)
+        self.layer12 = Unet_Attention_Block(8, 4)
+        self.layer13 = Upsample(2)
+        self.layer14 = Unet_Residual_Block(96, 32)
+        self.layer15 = Unet_Attention_Block(8, 4)
+        self.layer16 = Unet_Residual_Block(64, 32)
+        self.layer17 = Unet_Attention_Block(8, 4)
 
         # Skip connections
         self.skip1 = Matrix[float_dtype]()
         self.skip2 = Matrix[float_dtype]()
         self.skip3 = Matrix[float_dtype]()
         self.skip4 = Matrix[float_dtype]()
-        self.skip5 = Matrix[float_dtype]()
-        self.skip6 = Matrix[float_dtype]()
-        self.skip7 = Matrix[float_dtype]()
-        self.skip8 = Matrix[float_dtype]()
-        self.skip9 = Matrix[float_dtype]()
-        self.skip10 = Matrix[float_dtype]()
-        self.skip11 = Matrix[float_dtype]()
-        self.skip12 = Matrix[float_dtype]()
+
+    fn __copyinit__(inout self, other: Self):
+        self.layer1 = other.layer1
+        self.layer2 = other.layer2
+        self.layer3 = other.layer3
+        self.layer4 = other.layer4
+        self.layer5 = other.layer5
+        self.layer6 = other.layer6
+        self.layer7 = other.layer7
+        self.layer8 = other.layer8
+        self.layer9 = other.layer9
+        self.layer10 = other.layer10
+        self.layer11 = other.layer11
+        self.layer12 = other.layer12
+        self.layer13 = other.layer13
+        self.layer14 = other.layer14
+        self.layer15 = other.layer15
+        self.layer16 = other.layer16
+        self.layer17 = other.layer17
+        self.skip1 = other.skip1
+        self.skip2 = other.skip2
+        self.skip3 = other.skip3
+        self.skip4 = other.skip4
 
     fn forward(
         inout self,
@@ -243,11 +242,9 @@ struct UNet:
         inout context: Matrix[float_dtype],
         inout time: Matrix[float_dtype],
     ) -> Matrix[float_dtype]:
+        
         # Encoders
-        print("encoder checkpoint1")
         var out = self.layer1.forward(x)
-        print("encoder checkpoint1.1")
-        out.print_dims()
         self.skip1 = out
         out = self.layer2.forward(out, time)
         out = self.layer3.forward(out, context)
@@ -257,77 +254,25 @@ struct UNet:
         self.skip3 = out
         out = self.layer6.forward(out)
         self.skip4 = out
+
+        # Bottleneck
         out = self.layer7.forward(out, time)
         out = self.layer8.forward(out, context)
-        self.skip5 = out
+
+        # Decoders
+        out = out.concat(self.skip1, 0)
         out = self.layer9.forward(out, time)
         out = self.layer10.forward(out, context)
-        self.skip6 = out
-        out = self.layer11.forward(out)
-        self.skip7 = out
-        print("encoder checkpoint2")
-        out = self.layer12.forward(out, time)
-        out = self.layer13.forward(out, context)
-        self.skip8 = out
+        out = self.layer11.forward(out, time)
+        out = self.layer12.forward(out, context)
+        out = self.layer13.forward(out)
+        out = out.concat(self.skip2, 0)
+        out = out.concat(self.skip3, 0)
         out = self.layer14.forward(out, time)
         out = self.layer15.forward(out, context)
-        self.skip9 = out
-        out = self.layer16.forward(out)
-        self.skip10 = out
-        out = self.layer17.forward(out, time)
-        self.skip11 = out
-        out = self.layer18.forward(out, time)
-        self.skip12 = out
-        print("encoder checkpoint3")
-
-        # Bottlenecks
-        out = self.layer19.forward(out, time)
-        print("bottleneck checkpoint1")
-        out = self.layer20.forward(out, context)
-        out = self.layer21.forward(out, time)
-        print("bottleneck checkpoint2")
-        # Decoders
-        out = out.concat(self.skip1, 1)
-        out = self.layer22.forward(out, time)
-        print("decoder checkpoint1")
-        out = out.concat(self.skip2, 1)
-        out = self.layer23.forward(out, time)
-        out = out.concat(self.skip3, 1)
-        out = self.layer24.forward(out, time)
-        out = self.layer25.forward(out)
-        out = out.concat(self.skip4, 1)
-        out = self.layer26.forward(out, time)
-        out = self.layer27.forward(out, context)
-        print("decoder checkpoint2")
-        out = out.concat(self.skip5, 1)
-        out = self.layer28.forward(out, time)
-        out = self.layer29.forward(out, context)
-        out = out.concat(self.skip6, 1)
-        out = self.layer30.forward(out, time)
-        out = self.layer31.forward(out, context)
-        out = self.layer32.forward(out)
-        print("decoder checkpoint4")
-        out = out.concat(self.skip7, 1)
-        out = self.layer33.forward(out, time)
-        out = self.layer34.forward(out, context)
-        out = out.concat(self.skip8, 1)
-        out = self.layer35.forward(out, time)
-        out = self.layer36.forward(out, context)
-        out = out.concat(self.skip9, 1)
-        out = self.layer37.forward(out, time)
-        out = self.layer38.forward(out, context)
-        out = self.layer39.forward(out)
-        print("decoder checkpoint5")
-        out = out.concat(self.skip10, 1)
-        out = self.layer40.forward(out, time)
-        out = self.layer41.forward(out, context)
-        out = out.concat(self.skip11, 1)
-        out = self.layer42.forward(out, time)
-        out = self.layer43.forward(out, context)
-        out = out.concat(self.skip12, 1)
-        print("decoder checkpoint6")
-        out = self.layer44.forward(out, time)
-        out = self.layer45.forward(out, context)
+        out = out.concat(self.skip4, 0)
+        out = self.layer16.forward(out, time)
+        out = self.layer17.forward(out, context)
 
         return out
 
@@ -339,6 +284,10 @@ struct UNet_Output_Layer:
     fn __init__(inout self, in_channels: Int, out_channels: Int):
         self.layer1 = GroupNorm(32, in_channels)
         self.layer2 = Conv2D(in_channels, out_channels, 3, (1, 1))
+
+    fn __copyinit__(inout self, other: Self):
+        self.layer1 = other.layer1
+        self.layer2 = other.layer2
 
     fn forward(inout self, x: Matrix[float_dtype]) -> Matrix[float_dtype]:
         var out = self.layer1.forward(x)
@@ -353,9 +302,14 @@ struct Diffusion:
     var final: UNet_Output_Layer
 
     fn __init__(inout self):
-        self.time_embed = Time_Embedding(320)
+        self.time_embed = Time_Embedding(32)
         self.unet = UNet()
-        self.final = UNet_Output_Layer(320, 4)
+        self.final = UNet_Output_Layer(32, 4)
+
+    fn __copyinit__(inout self, other: Self):
+        self.time_embed = other.time_embed
+        self.unet = other.unet
+        self.final = other.final
 
     fn forward(
         inout self,

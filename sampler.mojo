@@ -15,11 +15,13 @@ struct DDPMSampler:
     fn __init__(
         inout self,
         seed_val: Int = 0,
-        num_training_steps: Int = 1000,
+        # Setting this to 10 for illustrative purposes, since we are not interested in training. Typical values would be around 1000
+        num_training_steps: Int = 10,
         beta_start: Float32 = 0.00085,
         beta_end: Float32 = 0.0120,
     ):
-        self.num_inference_steps = 50
+        # Setting this to 1 since I am intersted in demonstrating a single forward pass
+        self.num_inference_steps = 1
         self.start_step = 0
         self.seed_val = seed_val
         self.num_training_steps = num_training_steps
@@ -32,7 +34,7 @@ struct DDPMSampler:
 
     fn set_inference_timesteps(
         inout self,
-        num_inference_steps: Int = 50,
+        num_inference_steps: Int = 1,
     ):
         self.num_inference_steps = num_inference_steps
         let step_ratio: Float32 = self.num_training_steps // self.num_inference_steps
@@ -83,13 +85,11 @@ struct DDPMSampler:
         let beta_prod_prev = 1 - alpha_prod_prev
         let current_alpha = alpha_prod / alpha_prod_prev
         let current_beta = 1 - current_alpha
-        var beta_prod_matrix = Matrix[float_dtype](1, 1, 1)
-        var alpha_prod_matrix = Matrix[float_dtype](1, 1, 1)
-        alpha_prod_matrix[0, 0, 0] = alpha_prod[0]
-        beta_prod_matrix[0, 0, 0] = beta_prod[0]
+        let alpha_prod_final = alpha_prod[0]
+        let beta_prod_final = beta_prod[0]
         let pred_original_sample = (
-            latents - (beta_prod_matrix ** (0.5)).multiply(model_output)
-        ) / alpha_prod_matrix ** (0.5)
+            latents - (model_output) * (beta_prod_final ** (0.5))
+        ) / (alpha_prod_final ** (0.5))
         let pred_original_sample_coefficient: Float32 = (
             alpha_prod_prev ** (0.5) * current_beta
         ) / beta_prod

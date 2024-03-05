@@ -86,7 +86,7 @@ struct CLIP:
         self.layer_norm = LayerNorm(768)
 
     fn forward(inout self, inout tokens: Matrix[float_dtype]) -> Matrix[float_dtype]:
-        # Here, we do not convert "state" to the long type (float64)for simplicity in Mojo type handling, but in production it would be useful to copy and paste the body of all these functions with type float64 instead of float32
+        # Here, we do not convert "state" to the long type (float64)for simplicity in Mojo type handling, but in production it would be useful to implement these functions with type float64 instead of float32 for greater precision
         var reshaped_tokens = Matrix[float_dtype](1, 1, 77)
         reshaped_tokens *= 0
         reshaped_tokens.set_items(0, 0, slice(0, tokens.dim2), tokens)

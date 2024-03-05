@@ -352,15 +352,15 @@ fn get_time_embedding(
     timestep:SIMD[float_dtype, 1]
 ) -> Matrix[float_dtype]:
     
-    var freqs = Matrix[float_dtype](1, 1, 160)
+    var freqs = Matrix[float_dtype](1, 1, 16)
     @parameter
     fn time_range_fn[width: Int](index: Int):
         let float_index: Float32 = index
-        let val:Float32 = (-float_index / 160) ** 10000
+        let val:Float32 = (-float_index / 16) ** 1000
         let val_simd = SIMD[float_dtype, width].splat(val)
         freqs.store[width](0, 0, index, val_simd)
 
-    vectorize[1, time_range_fn](160)
+    vectorize[1, time_range_fn](16)
 
     var x = freqs * timestep
     var cos_x = x.cosine()
@@ -373,6 +373,9 @@ fn resize_image(
     let old_channels = image.dim0
     let old_width = image.dim1
     let old_height = image.dim2
+    if old_height == new_height and old_width == new_width:
+        return image
+
     var new_image = Matrix[float_dtype](old_channels, new_height, new_width)
 
     let scale_y = old_height / new_height
@@ -419,11 +422,11 @@ fn Softmax(inout matrix: Matrix[float_dtype], dim:Int = 0) -> Matrix[float_dtype
         @parameter
         fn row_softmax_channel(channel: Int):
             @parameter
-            fn row_softmax(row: Int):
+            fn row_softmax[width: Int](row: Int):
                 let row_sum = exp_matrix[channel, row, :].sum()
                 var row_div = exp_matrix[channel, row, :] / row_sum
                 exp_matrix.set_items(channel, row, slice(0, matrix.dim2), row_div)
-            parallelize[row_softmax](matrix.dim1, matrix.dim1)
+            vectorize_unroll[1, 1, row_softmax](matrix.dim1)
         parallelize[row_softmax_channel](matrix.dim0, matrix.dim0)
         return exp_matrix
 
@@ -431,11 +434,11 @@ fn Softmax(inout matrix: Matrix[float_dtype], dim:Int = 0) -> Matrix[float_dtype
         @parameter
         fn column_softmax_channel(channel: Int):
             @parameter
-            fn column_softmax(column: Int):
+            fn column_softmax[width: Int](column: Int):
                 let col_sum = exp_matrix[channel, :, column].sum()
                 var col_div = exp_matrix[channel, :, column] / col_sum
                 exp_matrix.set_items(channel, slice(0, matrix.dim1), column, col_div)
-            parallelize[column_softmax](matrix.dim2, matrix.dim2)
+            vectorize_unroll[1, 1, column_softmax](matrix.dim2)
         parallelize[column_softmax_channel](matrix.dim0, matrix.dim0)
         return exp_matrix
     else:
@@ -1614,6 +1617,27 @@ struct Matrix[dtype: DType]:
 
         return new_matrix
 
+    fn broadcast_channel(self, dim1: Int, dim2: Int) -> Self:
+        if self.dim1 != 1 and self.dim2 != 1:
+            print("Non-scalar matrix cannot be broadcasted. Returning null matrix")
+            return Self(0, 0, 0)
+
+        var new_matrix = Self(self.dim0, dim1, dim2)
+        new_matrix *= 0
+
+        @parameter
+        fn broadcast_channel(channel_idx: Int):
+            @parameter
+            fn broadcast_row(row_idx: Int):
+                @parameter
+                fn broadcast_col[width: Int](col_idx: Int):
+                    new_matrix[channel_idx, row_idx, col_idx] = self[channel_idx, 0, 0]
+                vectorize_unroll[1, 1, broadcast_col](dim2)
+            parallelize[broadcast_row](dim1, dim1)
+        parallelize[broadcast_channel](self.dim0, self.dim0)
+
+        return new_matrix
+
     fn print(self, prec: Int = 4) -> None:
         let dim0: Int = self.dim0
         let dim1: Int = self.dim1
@@ -1939,10 +1963,10 @@ struct Linear:
             @parameter
             fn channel_fn(i: Int):
                 @parameter
-                fn col_fn(j: Int):
+                fn col_fn[width: Int](j: Int):
                     bias_matrix.set_items(i, slice(0, bias_matrix.dim1), j, self.bias[0, 0, j])
                 
-                parallelize[col_fn](bias_matrix.dim1, bias_matrix.dim1)
+                vectorize_unroll[1, 1, col_fn]( bias_matrix.dim1)
 
             parallelize[channel_fn](output.dim0, output.dim0)
             output = output + bias_matrix
@@ -1957,15 +1981,17 @@ struct Upsample:
             print("Invalid scale factor for upsampling!")
         self.scale_factor = scale_factor
 
+    fn __copyinit__(inout self, other: Self) -> None:
+        self.scale_factor = other.scale_factor
+
     fn forward(self, x: Matrix[float_dtype]) -> Matrix[float_dtype]:
 
         if self.scale_factor < 1:
             print("Invalid scale factor for upsampling. Returning null matrix")
             return Matrix[float_dtype](0, 0, 0)
 
-        let new_height = x.dim1 * self.scale_factor
-        let new_width = x.dim2 * self.scale_factor
-        var output = Matrix[float_dtype](x.dim0, new_height, new_width)
+        let new_channels = x.dim0 * self.scale_factor
+        var output = Matrix[float_dtype](new_channels, x.dim1, x.dim2)
 
         @parameter
         fn channel_fn(i: Int):
@@ -1973,15 +1999,15 @@ struct Upsample:
             fn row_fn(j: Int):
                 @parameter
                 fn col_fn[simd_width: Int](k: Int):
-                    let val = x.load[1](i, j // self.scale_factor, k // self.scale_factor)
+                    let val = x.load[1](i // self.scale_factor, j, k)
                     output.store[1](i, j, k, val)
-                vectorize_unroll[1, 1, col_fn](new_width)
+                vectorize_unroll[1, 1, col_fn](x.dim2)
 
-            parallelize[row_fn](new_height, new_height)
-
-        parallelize[channel_fn](x.dim0, x.dim0)
+            parallelize[row_fn](x.dim1, x.dim1)
 
         return output
+
+
 
 struct Embedding:
     var n_vocab: Int
@@ -2025,6 +2051,9 @@ struct LayerNorm:
     var group_norm: GroupNorm
     fn __init__(inout self, n_embed: Int) -> None:
         self.group_norm = GroupNorm(1, n_embed)
+
+    fn __copyinit__(inout self, other: Self) -> None:
+        self.group_norm = other.group_norm
 
     fn forward(self, x: Matrix[float_dtype]) -> Matrix[float_dtype]:
         return self.group_norm.forward(x)

@@ -5,13 +5,14 @@ from diffusion import Diffusion
 from sampler import DDPMSampler
 
 
+# We set the number of inference steps to 1, as we only want to do a single forward pass. Typical values would be around 50
 fn generate(
     prompt: String,
     backup_prompt: String = "",
     strength: Float32 = 0.8,
     cfg: Bool = True,
     cfg_scale: Float32 = 7.5,
-    inference_steps: Int = 50,
+    inference_steps: Int = 1,
     seed_val: Int = 0,
     input_image: Matrix[float_dtype] = Matrix[float_dtype](0, 0, 0),
 ) -> Matrix[float_dtype]:
@@ -52,34 +53,41 @@ fn generate(
     var sampler = DDPMSampler(seed_val)
     sampler.set_inference_timesteps(inference_steps)
 
-    let latents_shape = Tensor[DType.int64](4, 64, 64)
+    let latents_shape = (4, 64, 64)
     var latents = Matrix[float_dtype](
-        int(latents_shape[0]), int(latents_shape[1]), int(latents_shape[2])
+        Tuple.get[0, Int](latents_shape),
+        Tuple.get[1, Int](latents_shape),
+        Tuple.get[2, Int](latents_shape),
     )
     if input_image.size() > 0:
         var encoder = Encoder()
+        print("Encoder instance created")
         var resized_input = resize_image(input_image, 512, 512)
         let rescaled_input = resized_input.rescale((0, 255), (-1, 1))
         var encoder_noise = Matrix[float_dtype](
-            int(latents_shape[0]), int(latents_shape[1]), int(latents_shape[2])
+            Tuple.get[0, Int](latents_shape),
+            Tuple.get[1, Int](latents_shape),
+            Tuple.get[2, Int](latents_shape),
         )
         encoder_noise.init_weights_seed(seed_val)
+        print("Encoder noise initialized")
         latents = encoder.forward(rescaled_input, encoder_noise)
         sampler.set_strength(strength)
         latents = sampler.add_noise(latents, sampler.timesteps[0])
     else:
         latents.init_weights_seed(seed_val)
+
     var diffusion = Diffusion()
+    print("Diffusion instance created")
     let num_timesteps = sampler.timesteps.num_elements()
     for i in range(num_timesteps):
         let timestep = sampler.timesteps[i]
         var time_embedding = get_time_embedding(timestep)
-        print("CHECKPOINT - time embedding generated")
         var model_input = latents
         if cfg:
             model_input = model_input.concat(model_input, dim=0)
+
         var model_output = diffusion.forward(model_input, context, time_embedding)
-        print("Diffusion forward pass concluded")
 
         if cfg:
             let chunked_output = model_output.chunk(0, 2)
@@ -93,9 +101,10 @@ fn generate(
             ) * cfg_scale_f32 + backup_output
 
         latents = sampler.step(int(timestep), latents, model_output)
+        print("Timestep", i, "concluded")
 
     var decoder = Decoder()
     var images = decoder.forward(latents)
     print("Decoder forward pass concluded")
     images = images.rescale((-1, 1), (0, 255), clamp=True)
-    return images[0, :, :]
+    return images
