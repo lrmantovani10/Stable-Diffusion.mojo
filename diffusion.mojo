@@ -176,10 +176,6 @@ struct UNet:
     var layer15: Unet_Attention_Block
     var layer16: Unet_Residual_Block
     var layer17: Unet_Attention_Block
-    var skip1: Matrix[float_dtype]
-    var skip2: Matrix[float_dtype]
-    var skip3: Matrix[float_dtype]
-    var skip4: Matrix[float_dtype]
 
     fn __init__(inout self):
         # Encoders
@@ -207,12 +203,6 @@ struct UNet:
         self.layer16 = Unet_Residual_Block(64, 32)
         self.layer17 = Unet_Attention_Block(8, 4)
 
-        # Skip connections
-        self.skip1 = Matrix[float_dtype]()
-        self.skip2 = Matrix[float_dtype]()
-        self.skip3 = Matrix[float_dtype]()
-        self.skip4 = Matrix[float_dtype]()
-
     fn __copyinit__(inout self, other: Self):
         self.layer1 = other.layer1
         self.layer2 = other.layer2
@@ -231,10 +221,6 @@ struct UNet:
         self.layer15 = other.layer15
         self.layer16 = other.layer16
         self.layer17 = other.layer17
-        self.skip1 = other.skip1
-        self.skip2 = other.skip2
-        self.skip3 = other.skip3
-        self.skip4 = other.skip4
 
     fn forward(
         inout self,
@@ -245,32 +231,32 @@ struct UNet:
         
         # Encoders
         var out = self.layer1.forward(x)
-        self.skip1 = out
+        var skip1 = out
         out = self.layer2.forward(out, time)
         out = self.layer3.forward(out, context)
-        self.skip2 = out
+        var skip2 = out
         out = self.layer4.forward(out, time)
         out = self.layer5.forward(out, context)
-        self.skip3 = out
+        var skip3 = out
         out = self.layer6.forward(out)
-        self.skip4 = out
+        var skip4 = out
 
         # Bottleneck
         out = self.layer7.forward(out, time)
         out = self.layer8.forward(out, context)
 
         # Decoders
-        out = out.concat(self.skip1, 0)
+        out = out.concat(skip1, 0)
         out = self.layer9.forward(out, time)
         out = self.layer10.forward(out, context)
         out = self.layer11.forward(out, time)
         out = self.layer12.forward(out, context)
         out = self.layer13.forward(out)
-        out = out.concat(self.skip2, 0)
-        out = out.concat(self.skip3, 0)
+        out = out.concat(skip2, 0)
+        out = out.concat(skip3, 0)
         out = self.layer14.forward(out, time)
         out = self.layer15.forward(out, context)
-        out = out.concat(self.skip4, 0)
+        out = out.concat(skip4, 0)
         out = self.layer16.forward(out, time)
         out = self.layer17.forward(out, context)
 
@@ -296,6 +282,7 @@ struct UNet_Output_Layer:
         return out
 
 
+# Here, I reduced the values used to initialize Time_Embedding and UNet_Output_Layer from 320 to 32 for faster testing time.
 struct Diffusion:
     var time_embed: Time_Embedding
     var unet: UNet

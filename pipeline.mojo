@@ -6,6 +6,8 @@ from sampler import DDPMSampler
 
 
 # We set the number of inference steps to 1, as we only want to do a single forward pass. Typical values would be around 50
+
+# Also, this runs on a batch size of 1 (like in stochastic gradient descent. To use the same code but with a higher batch size, create a Matrix_Array struct (available in utils.mojo) and parallelize the generate() code for all its elements.
 fn generate(
     prompt: String,
     backup_prompt: String = "",
@@ -76,9 +78,10 @@ fn generate(
         latents = sampler.add_noise(latents, sampler.timesteps[0])
     else:
         latents.init_weights_seed(seed_val)
-
+    
     var diffusion = Diffusion()
     print("Diffusion instance created")
+
     let num_timesteps = sampler.timesteps.num_elements()
     for i in range(num_timesteps):
         let timestep = sampler.timesteps[i]
