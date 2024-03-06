@@ -56,4 +56,6 @@ mojo demo.mojo
 
 * Thanks to the awesome [Llama2 Mojo implementation](https://github.com/tairov/llama2.mojo) that helped me set up the tokenizer and taught me how to load bianry values into Mojo.
 
+* Thanks to [this amazing Karpathy tutorial](https://github.com/karpathy/llama2.c/blob/master/tokenizer.py) for creating a Llama2 tokenizer
+
 * Thanks to Modular for providing the #mojo-help Discord channel, which clarified many of my questions about the Mojo programming language.
