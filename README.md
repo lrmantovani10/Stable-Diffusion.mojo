@@ -50,6 +50,8 @@ mojo package helpers -o "helpers.mojopkg"
 mojo demo.mojo
 ````
 
+Furthermore, feel free to change the "image_size" alias in the pipeline.mojo file to fit the image width / length that you desire to use!
+
 ## Thanks 🙏
 
 * Thanks to the extraordinary [Pytorch Stable Diffusion](https://github.com/hkproj/pytorch-stable-diffusion) implementation available here. This was the primary source of inspiration for this project.
