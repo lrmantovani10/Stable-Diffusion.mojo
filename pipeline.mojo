@@ -4,8 +4,11 @@ from vae import Encoder, Decoder
 from diffusion import Diffusion
 from sampler import DDPMSampler
 
+# Image width / height. Make sure it is a multiple of 8! Here, we assume a square image
+alias image_size = 32
 
 # We set the number of inference steps to 1, as we only want to do a single forward pass. Typical values would be around 50
+
 
 # Also, this runs on a batch size of 1 (like in stochastic gradient descent. To use the same code but with a higher batch size, create a Matrix_Array struct (available in utils.mojo) and parallelize the generate() code for all its elements.
 fn generate(
@@ -55,7 +58,7 @@ fn generate(
     var sampler = DDPMSampler(seed_val)
     sampler.set_inference_timesteps(inference_steps)
 
-    var latents_shape = (4, 64, 64)
+    var latents_shape = (4, image_size // 8, image_size // 8)
     var latents = Matrix[float_dtype](
         Tuple.get[0, Int](latents_shape),
         Tuple.get[1, Int](latents_shape),
@@ -64,7 +67,7 @@ fn generate(
     if input_image.size() > 0:
         var encoder = Encoder()
         print("Encoder instance created")
-        var resized_input = resize_image(input_image, 512, 512)
+        var resized_input = resize_image(input_image, image_size, image_size)
         var rescaled_input = resized_input.rescale((0, 255), (-1, 1))
         var encoder_noise = Matrix[float_dtype](
             Tuple.get[0, Int](latents_shape),

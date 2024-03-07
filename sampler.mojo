@@ -113,16 +113,12 @@ struct DDPMSampler:
     ) -> Matrix[float_dtype]:
         var int_timestep = int(timestep)
         var sqrt_alpha_prod = self.alphas_cumprod[int_timestep] ** 0.5
-        var sqrt_alpha_prod_matrix = Matrix[float_dtype](1, 1, 1)
-        sqrt_alpha_prod_matrix[0, 0, 0] = sqrt_alpha_prod[0]
+        var sqrt_alpha_prod_scalar = sqrt_alpha_prod[0]
         var sqrt_one_minus_alpha_prod = (1 - self.alphas_cumprod[int_timestep]) ** 0.5
-        var sqrt_one_minus_alpha_prod_matrix = Matrix[float_dtype](1, 1, 1)
-        sqrt_one_minus_alpha_prod_matrix[0, 0, 0] = sqrt_one_minus_alpha_prod[0]
+        var sqrt_one_minus_alpha_prod_scalar = sqrt_one_minus_alpha_prod[0]
         var noise = Matrix[float_dtype](
             original_samples.dim0, original_samples.dim1, original_samples.dim2
         )
         noise.init_weights_seed(self.seed_val)
-        var noisy_samples = sqrt_alpha_prod_matrix.multiply(
-            original_samples
-        ) + sqrt_one_minus_alpha_prod_matrix.multiply(noise)
+        var noisy_samples = original_samples * sqrt_alpha_prod_scalar + noise * sqrt_one_minus_alpha_prod_scalar
         return noisy_samples
