@@ -85,7 +85,7 @@ struct Unet_Attention_Block:
     var layer10: Conv2D
 
     fn __init__(inout self, n_head: Int, n_embed: Int, d_context: Int = 768):
-        let channels = n_head * n_embed
+        var channels = n_head * n_embed
         self.layer1 = GroupNorm(32, channels, epsilon=1e-6)
         self.layer2 = Conv2D(channels, channels, 1, (0, 0))
         self.layer3 = LayerNorm(channels)
@@ -112,7 +112,7 @@ struct Unet_Attention_Block:
     fn forward(
         inout self, x: Matrix[float_dtype], inout context: Matrix[float_dtype]
     ) -> Matrix[float_dtype]:
-        let residue_long = x
+        var residue_long = x
         var out = self.layer1.forward(x)
         out = self.layer2.forward(out)
         out = out.reshape(1, out.dim0, out.dim1 * out.dim2)
@@ -135,7 +135,7 @@ struct Unet_Attention_Block:
         out = out.transpose(0, 2)
         out = self.layer7.forward(out)
         out = out.transpose(0, 2)
-        let chunked_linear = self.layer8.forward(out).chunk(2, 2)
+        var chunked_linear = self.layer8.forward(out).chunk(2, 2)
         out = chunked_linear[0]
         var gate = chunked_linear[1]
         out = out.transpose(1, 2)
@@ -144,8 +144,8 @@ struct Unet_Attention_Block:
 
         ## In these lines, I am concatenating the "out" variable multiple times because the latent space dimension (128 rows here) is much smaller than the "residue short" variable, which was constructed from a real Stable Diffusion tokenizer (which is why it has 4096 rows).
         # However, this should not be done in production. The correct approach is either to use a smaller tokenizer or a larger latent space.
-        let original_out = out
-        let diff = residue_short.dim1 // out.dim1 - 1
+        var original_out = out
+        var diff = residue_short.dim1 // out.dim1 - 1
         if diff > 0:
             for _ in range(residue_short.dim1 // out.dim1 - 1):
                 out = out.concat(original_out, 1)
@@ -228,7 +228,7 @@ struct UNet:
         inout context: Matrix[float_dtype],
         inout time: Matrix[float_dtype],
     ) -> Matrix[float_dtype]:
-        
+
         # Encoders
         var out = self.layer1.forward(x)
         var skip1 = out

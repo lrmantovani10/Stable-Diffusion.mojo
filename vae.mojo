@@ -15,7 +15,7 @@ struct Attention_Block:
         self.attention = other.attention
 
     fn forward(inout self, inout x: Matrix[float_dtype]) -> Matrix[float_dtype]:
-        let residue = x
+        var residue = x
         var out = self.group_norm.forward(x)
         out = out.reshape(x.dim0, x.dim1 * x.dim2, 1)
         out = out.transpose(0, 2)
@@ -102,13 +102,13 @@ struct Encoder:
     fn metrics_evals(
         self, matrix: Matrix[float_dtype], noise: Matrix[float_dtype]
     ) -> Matrix[float_dtype]:
-        let chunks = matrix.chunk(0, 2)
-        let mean = chunks[0]
+        var chunks = matrix.chunk(0, 2)
+        var mean = chunks[0]
         var log_variance = chunks[1]
         log_variance = log_variance.clamp(-30, 20)
-        let variance = log_variance.exp()
-        let std = variance.sqrt()
-        let out = mean + (noise.multiply(std))
+        var variance = log_variance.exp()
+        var std = variance.sqrt()
+        var out = mean + (noise.multiply(std))
         out *= 0.18215
         return out
 
