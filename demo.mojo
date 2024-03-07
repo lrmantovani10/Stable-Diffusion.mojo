@@ -3,8 +3,8 @@ from helpers.utils import *
 fn main() raises -> None:
     let prompt = "a cat flying a spaceship"
     let backup_prompt = ''
-    let input_image = Matrix[float_dtype](1, 512, 512)
-    let do_cfg = False
+    let input_image = Matrix[float_dtype](1, 32, 32)
+    let do_cfg = True
     let cfg_scale = 0.8
     let strength = 0.9
     let num_inference_steps = 1
