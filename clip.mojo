@@ -10,7 +10,7 @@ struct ClipEmbedding:
 
     fn __init__(inout self, n_vocab: Int, n_embed: Int, n_token: Int):
         self.token_embedding = Embedding(n_vocab, n_embed)
-        let pos_embed_matrix = Matrix[float_dtype](1, n_token, n_embed)
+        var pos_embed_matrix = Matrix[float_dtype](1, n_token, n_embed)
         pos_embed_matrix *= 0
         self.position_embedding = pos_embed_matrix
 
@@ -89,7 +89,7 @@ struct CLIP:
         # Here, we do not convert "state" to the long type (float64)for simplicity in Mojo type handling, but in production it would be useful to implement these functions with type float64 instead of float32 for greater precision
         var reshaped_tokens = Matrix[float_dtype](1, 1, 77)
         reshaped_tokens *= 0
-        reshaped_tokens.set_items(0, 0, slice(0, tokens.dim2), tokens)
+        reshaped_tokens.set_items(0, 0, Slice(0, tokens.dim2), tokens)
         var state = self.embedding.forward(reshaped_tokens)
         state = self.player1.forward(state)
         state = self.player2.forward(state)

@@ -37,8 +37,8 @@ struct DDPMSampler:
         num_inference_steps: Int = 1,
     ):
         self.num_inference_steps = num_inference_steps
-        let step_ratio: Float32 = self.num_training_steps // self.num_inference_steps
-        let timesteps = round_tensor(
+        var step_ratio: Float32 = self.num_training_steps // self.num_inference_steps
+        var timesteps = round_tensor(
             arange(0, self.num_inference_steps, True) * step_ratio
         )
         self.timesteps = timesteps
@@ -47,17 +47,17 @@ struct DDPMSampler:
         inout self,
         timestep: Int,
     ) -> Int:
-        let prev_t = timestep - self.num_training_steps // self.num_inference_steps
+        var prev_t = timestep - self.num_training_steps // self.num_inference_steps
         return prev_t
 
     fn get_variance(
         inout self,
         timestep: Int,
     ) -> Float32:
-        let prev_t = self.get_previous_timestep(timestep)
-        let alpha_prod_t = self.alphas_cumprod[timestep]
-        let alpha_prod_t_prev = self.alphas_cumprod[prev_t] if prev_t >= 0 else 1
-        let current_beta_t = 1 - alpha_prod_t / alpha_prod_t_prev
+        var prev_t = self.get_previous_timestep(timestep)
+        var alpha_prod_t = self.alphas_cumprod[timestep]
+        var alpha_prod_t_prev = self.alphas_cumprod[prev_t] if prev_t >= 0 else 1
+        var current_beta_t = 1 - alpha_prod_t / alpha_prod_t_prev
         var variance = (1 - alpha_prod_t_prev) / (1 - alpha_prod_t) * current_beta_t
 
         # Preventing zero values
@@ -65,10 +65,10 @@ struct DDPMSampler:
         return variance[0]
 
     fn set_strength(inout self, strength: Float32):
-        let start_step = self.num_inference_steps - int(
+        var start_step = self.num_inference_steps - int(
             self.num_inference_steps * strength
         )
-        let timesteps_length = self.timesteps.num_elements()
+        var timesteps_length = self.timesteps.num_elements()
         self.timesteps = get_tensor_values(self.timesteps, start_step, timesteps_length)
         self.start_step = start_step
 
@@ -78,22 +78,22 @@ struct DDPMSampler:
         latents: Matrix[float_dtype],
         model_output: Matrix[float_dtype],
     ) -> Matrix[float_dtype]:
-        let prev_t = self.get_previous_timestep(timestep)
-        let alpha_prod = self.alphas_cumprod[timestep]
-        let alpha_prod_prev = self.alphas_cumprod[prev_t] if prev_t >= 0 else 1
-        let beta_prod = 1 - alpha_prod
-        let beta_prod_prev = 1 - alpha_prod_prev
-        let current_alpha = alpha_prod / alpha_prod_prev
-        let current_beta = 1 - current_alpha
-        let alpha_prod_final = alpha_prod[0]
-        let beta_prod_final = beta_prod[0]
-        let pred_original_sample = (
+        var prev_t = self.get_previous_timestep(timestep)
+        var alpha_prod = self.alphas_cumprod[timestep]
+        var alpha_prod_prev = self.alphas_cumprod[prev_t] if prev_t >= 0 else 1
+        var beta_prod = 1 - alpha_prod
+        var beta_prod_prev = 1 - alpha_prod_prev
+        var current_alpha = alpha_prod / alpha_prod_prev
+        var current_beta = 1 - current_alpha
+        var alpha_prod_final = alpha_prod[0]
+        var beta_prod_final = beta_prod[0]
+        var pred_original_sample = (
             latents - (model_output) * (beta_prod_final ** (0.5))
         ) / (alpha_prod_final ** (0.5))
-        let pred_original_sample_coefficient: Float32 = (
+        var pred_original_sample_coefficient: Float32 = (
             alpha_prod_prev ** (0.5) * current_beta
         ) / beta_prod
-        let current_sample_coefficient = current_alpha ** (
+        var current_sample_coefficient = current_alpha ** (
             0.5
         ) * beta_prod_prev / beta_prod
         var pred_previous_sample = pred_original_sample * pred_original_sample_coefficient + latents * current_sample_coefficient
@@ -103,22 +103,22 @@ struct DDPMSampler:
                 model_output.dim0, model_output.dim1, model_output.dim2
             )
             noise.init_weights_seed(self.seed_val)
-            let multiplier = (self.get_variance(timestep) ** 0.5)
-            let variance = noise * multiplier
+            var multiplier = (self.get_variance(timestep) ** 0.5)
+            var variance = noise * multiplier
             pred_previous_sample = pred_previous_sample + variance
         return pred_previous_sample
 
     fn add_noise(
         inout self, original_samples: Matrix[float_dtype], timestep: Float32
     ) -> Matrix[float_dtype]:
-        let int_timestep = int(timestep)
-        let sqrt_alpha_prod = self.alphas_cumprod[int_timestep] ** 0.5
+        var int_timestep = int(timestep)
+        var sqrt_alpha_prod = self.alphas_cumprod[int_timestep] ** 0.5
         var sqrt_alpha_prod_scalar = sqrt_alpha_prod[0]
-        let sqrt_one_minus_alpha_prod = (1 - self.alphas_cumprod[int_timestep]) ** 0.5
+        var sqrt_one_minus_alpha_prod = (1 - self.alphas_cumprod[int_timestep]) ** 0.5
         var sqrt_one_minus_alpha_prod_scalar = sqrt_one_minus_alpha_prod[0]
         var noise = Matrix[float_dtype](
             original_samples.dim0, original_samples.dim1, original_samples.dim2
         )
         noise.init_weights_seed(self.seed_val)
-        let noisy_samples = original_samples * sqrt_alpha_prod_scalar + noise * sqrt_one_minus_alpha_prod_scalar
+        var noisy_samples = original_samples * sqrt_alpha_prod_scalar + noise * sqrt_one_minus_alpha_prod_scalar
         return noisy_samples

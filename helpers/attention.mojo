@@ -48,13 +48,13 @@ struct Self_Attention:
         if causal_mask:
             var mask = Matrix[float_dtype](weight.dim0, weight.dim1, weight.dim2)
             mask.set_items(
-                slice(0, mask.dim0), slice(0, mask.dim1), slice(0, mask.dim2), 1
+                Slice(0, mask.dim0), Slice(0, mask.dim1), Slice(0, mask.dim2), 1
             )
             mask = mask.triu(1)
-            let neg_inf = math.limit.neginf[float_dtype]()
+            var neg_inf = math.limit.neginf[float_dtype]()
             weight = weight.masked_fill(mask, neg_inf)
 
-        let head_float: Float32 = x.dim2 // self.n_heads
+        var head_float: Float32 = x.dim2 // self.n_heads
         weight = weight / math.sqrt(head_float)
         weight = Softmax(weight, dim=2)
         var output = weight.matmul(v)
@@ -107,7 +107,7 @@ struct Cross_Attention:
         v = v.reshape(v.dim0 * self.n_heads, v.dim1, v.dim2 // self.n_heads)
 
         var weight = q.matmul(k.transpose(1, 2))
-        let head_float: Float32 = x.dim2 // self.n_heads
+        var head_float: Float32 = x.dim2 // self.n_heads
         weight = weight / math.sqrt(head_float)
         weight = Softmax(weight, dim=2)
         var output = weight.matmul(v)

@@ -37,19 +37,19 @@ fn generate(
     # Using a vocab size of 49408, since we rely on the CLIP Tokenizer
     var tokenizer = Tokenizer(49408, tokenizer_buffer)
     var context: Matrix[float_dtype]
-    let processed_prompt = prompt.replace(" ", "</w>")
-    let processed_backup = backup_prompt.replace(" ", "</w>")
+    var processed_prompt = prompt.replace(" ", "</w>")
+    var processed_backup = backup_prompt.replace(" ", "</w>")
     if cfg:
         var prompt_tokens = DynamicVector[Int]()
-        let cond_tokens_vector = bpe_encode(processed_prompt, tokenizer)
+        var cond_tokens_vector = bpe_encode(processed_prompt, tokenizer)
         var cond_tokens = vector_to_matrix(cond_tokens_vector)
         var cond_context = clip.forward(cond_tokens)
-        let backup_tokens_vector = bpe_encode(processed_backup, tokenizer)
+        var backup_tokens_vector = bpe_encode(processed_backup, tokenizer)
         var backup_tokens = vector_to_matrix(backup_tokens_vector)
-        let backup_context = clip.forward(backup_tokens)
+        var backup_context = clip.forward(backup_tokens)
         context = cond_context.concat(backup_context, dim=0)
     else:
-        let tokens_vector = bpe_encode(processed_prompt, tokenizer)
+        var tokens_vector = bpe_encode(processed_prompt, tokenizer)
         var tokens = vector_to_matrix(tokens_vector)
         context = clip.forward(tokens)
 
@@ -58,7 +58,7 @@ fn generate(
     var sampler = DDPMSampler(seed_val)
     sampler.set_inference_timesteps(inference_steps)
 
-    let latents_shape = (4, image_size // 8, image_size // 8)
+    var latents_shape = (4, image_size // 8, image_size // 8)
     var latents = Matrix[float_dtype](
         Tuple.get[0, Int](latents_shape),
         Tuple.get[1, Int](latents_shape),
@@ -68,7 +68,7 @@ fn generate(
         var encoder = Encoder()
         print("Encoder instance created")
         var resized_input = resize_image(input_image, image_size, image_size)
-        let rescaled_input = resized_input.rescale((0, 255), (-1, 1))
+        var rescaled_input = resized_input.rescale((0, 255), (-1, 1))
         var encoder_noise = Matrix[float_dtype](
             Tuple.get[0, Int](latents_shape),
             Tuple.get[1, Int](latents_shape),
@@ -85,9 +85,9 @@ fn generate(
     var diffusion = Diffusion()
     print("Diffusion instance created")
 
-    let num_timesteps = sampler.timesteps.num_elements()
+    var num_timesteps = sampler.timesteps.num_elements()
     for i in range(num_timesteps):
-        let timestep = sampler.timesteps[i]
+        var timestep = sampler.timesteps[i]
         var time_embedding = get_time_embedding(timestep)
         var model_input = latents
         if cfg:
@@ -96,10 +96,10 @@ fn generate(
         var model_output = diffusion.forward(model_input, context, time_embedding)
 
         if cfg:
-            let chunked_output = model_output.chunk(0, 2)
-            let conditional_output = chunked_output[0]
-            let backup_output = chunked_output[1]
-            let cfg_scale_f32 = SIMD[DType.float32, 1].splat(
+            var chunked_output = model_output.chunk(0, 2)
+            var conditional_output = chunked_output[0]
+            var backup_output = chunked_output[1]
+            var cfg_scale_f32 = SIMD[DType.float32, 1].splat(
                 cfg_scale.cast[DType.float32]()
             )
             model_output = (
