@@ -41,7 +41,7 @@ python tokenizer_creation.py
 mojo package helpers -o "helpers.mojopkg"
 ````
 
-* Then, modify vae.mojo and diffusion.mojo so that the structs defined in these files have the same architecture as the model whose weigths you are loading in. Since there are various versions of Stable Diffusion (XL, mini, etc.) in this code I have provided a very small, basic implementation of the VAE and Diffusion components.
+* Then, modify vae.mojo and diffusion.mojo so that the structs defined in these files have the same architecture as the model whose weights you are loading in. Since there are various versions of Stable Diffusion (XL, mini, etc.) in this code I have provided a very small, basic implementation of the VAE and Diffusion components.
 
 * Next, load your weights into the model. To do so, check out the "Tokenizer" struct in helpers/utils.mojo. The __init__ function in this struct shows how to load weights from a .bin file into a struct, so the same process can be applied to any other structs (CLIP, Encoder, Diffusion, etc) for which you would like to load weights. Just copy and paste that code and modify as needed. This file input / output logic was retrieved from the amazing Llama2.mojo project, linked in the "thanks" section. 
 
@@ -51,6 +51,13 @@ mojo demo.mojo
 ````
 
 Furthermore, feel free to change the "image_size" alias in the pipeline.mojo file to fit the image width / length that you desire to use!
+
+## Next Steps for this project (please fork and open a pull request if you would like to implement this!)
+
+* Load weights into the model by modifying vae.mojo and diffusion.mojo. One good source of weights is Stable Diffusion mini, available [here](https://huggingface.co/segmind/tiny-sd/tree/main). To load weights, check out the __init__ function of the Tokenizer struct in utils.mojo. An identical method can be used to initialize the weights for every other struct in the model from a .bin file
+    * For vae.mojo: Add more residual blocks, attention blocks, and convolution layers to the encoder and decoder structs in order to match the architecture of the Stable Diffusion model whose weights are being used (in this example, Stable Diffusion mini)
+    * For diffusion.mojo: Similarly, add more layers to the UNet defined in diffusion.mojo to match the architecture of the model whose weights you are loading. Make sure to modify the __forward__ function of Unet_Attention_Block to make the dimensions of the variable "out" match those of the "residual short" variable as opposed to simply concatenating the "out" variable multiple times like I am currently doing in this toy example
+* Benchmark the speed of this Mojo implementation against the original Python-based one. 
 
 ## Thanks 🙏
 
