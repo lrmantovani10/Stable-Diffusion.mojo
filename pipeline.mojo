@@ -40,7 +40,7 @@ fn generate(
     var processed_prompt = prompt.replace(" ", "</w>")
     var processed_backup = backup_prompt.replace(" ", "</w>")
     if cfg:
-        var prompt_tokens = DynamicVector[Int]()
+        var prompt_tokens = List[Int]()
         var cond_tokens_vector = bpe_encode(processed_prompt, tokenizer)
         var cond_tokens = vector_to_matrix(cond_tokens_vector)
         var cond_context = clip.forward(cond_tokens)
