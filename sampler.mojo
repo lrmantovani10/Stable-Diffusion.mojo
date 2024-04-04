@@ -69,7 +69,7 @@ struct DDPMSampler:
             self.num_inference_steps * strength
         )
         var timesteps_length = self.timesteps.num_elements()
-        self.timesteps = get_tensor_values(self.timesteps, start_step, timesteps_length)
+        self.timesteps = get_tensor_values(self.timesteps, start_step, start_step + timesteps_length)
         self.start_step = start_step
 
     fn step(

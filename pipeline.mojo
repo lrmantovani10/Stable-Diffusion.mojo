@@ -5,10 +5,9 @@ from diffusion import Diffusion
 from sampler import DDPMSampler
 
 # Image width / height. Make sure it is a multiple of 8! Here, we assume a square image
-alias image_size = 32
+alias image_size = 8
 
 # We set the number of inference steps to 1, as we only want to do a single forward pass. Typical values would be around 50
-
 
 # Also, this runs on a batch size of 1 (like in stochastic gradient descent. To use the same code but with a higher batch size, create a Matrix_Array struct (available in utils.mojo) and parallelize the generate() code for all its elements.
 fn generate(
@@ -75,7 +74,6 @@ fn generate(
             Tuple.get[2, Int](latents_shape),
         )
         encoder_noise.init_weights_seed(seed_val)
-        print("Encoder noise initialized")
         latents = encoder.forward(rescaled_input, encoder_noise)
         sampler.set_strength(strength)
         latents = sampler.add_noise(latents, sampler.timesteps[0])
@@ -90,12 +88,26 @@ fn generate(
         var timestep = sampler.timesteps[i]
         var time_embedding = get_time_embedding(timestep)
         var model_input = latents
-        if cfg:
-            model_input = model_input.concat(model_input, dim=0)
+        var model_output: Matrix[float_dtype]
+        if not cfg:
+            model_output = diffusion.forward(model_input, context, time_embedding)
+        else:
 
-        var model_output = diffusion.forward(model_input, context, time_embedding)
+            # Due to a current mojo limitation, I am currently unable to run this parallelized code, so I am using the sequential approach below.
+            # Hopefully Mojo will support non-embarassingly-parallel tasks soon.
+            # @parameter
+            # fn parallel_diffusion(idx: Int):
+            #     if idx == 0:
+            #         model_output1 = diffusion.forward(model_input, context, time_embedding)
+            #     else:
+            #         model_output2 = diffusion.forward(model_input, context, time_embedding)
+            
+            # parallelize[parallel_diffusion](2, 2)
 
-        if cfg:
+            var model_output1 = diffusion.forward(model_input, context, time_embedding)
+            var model_output2 = diffusion.forward(model_input, context, time_embedding)
+
+            model_output = model_output1.concat(model_output2, dim=0)
             var chunked_output = model_output.chunk(0, 2)
             var conditional_output = chunked_output[0]
             var backup_output = chunked_output[1]

@@ -354,15 +354,15 @@ fn get_time_embedding(
     timestep:SIMD[float_dtype, 1]
 ) -> Matrix[float_dtype]:
 
-    var freqs = Matrix[float_dtype](1, 1, 16)
+    var freqs = Matrix[float_dtype](1, 1, 160)
     @parameter
     fn time_range_fn[width: Int](index: Int):
         var float_index: Float32 = index
-        var val:Float32 = (-float_index / 16) ** 1000
+        var val:Float32 = (-float_index / 160) ** 10000
         var val_simd = SIMD[float_dtype, width].splat(val)
         freqs.store[width](0, 0, index, val_simd)
 
-    vectorize[time_range_fn, 1](16)
+    vectorize[time_range_fn, 1](160)
 
     var x = freqs * timestep
     var cos_x = x.cosine()
