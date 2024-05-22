@@ -41,7 +41,7 @@ if __name__ == "__main__":
 
     # This section was taken from Karpathy's implementation of Llama2 in C: https://github.com/karpathy/llama2.c/blob/master/tokenizer.py
     max_token_length = max(len(k) for k in tokens)
-    with open(out_file, "wb") as f:
+    with open(out_file, "wb", encoding="utf8")) as f:
         f.write(struct.pack("I", max_token_length))
         for bytes, score in zip(tokens, scores):
             f.write(struct.pack("fI", score, len(bytes)))
