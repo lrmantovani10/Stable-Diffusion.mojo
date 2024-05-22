@@ -18,7 +18,7 @@ start_id = "<|startoftext|>"
 end_id = "<|endoftext|>"
 
 if __name__ == "__main__":
-    with open(in_file, "r") as json_file:
+    with open(in_file, "r", encoding="utf8") as json_file:
         data = json.load(json_file)
         merges = data["model"]["merges"]
         data = data["model"]["vocab"]
